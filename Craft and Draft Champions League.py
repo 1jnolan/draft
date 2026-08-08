@@ -9,9 +9,8 @@ st_autorefresh(interval=10000, key="cd_cl_refresh")
 
 LEAGUE_1_ID = 858
 LEAGUE_2_ID = 4159
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-BOOTSTRAP_URL = "https://draft.premierleague.com/api/bootstrap-static"
 LEAGUE_URL_FMT = "https://draft.premierleague.com/api/league/{}/details"
 TX_URL_FMT = "https://draft.premierleague.com/api/draft/league/{}/transactions"
 
@@ -26,30 +25,21 @@ def fetch_json(url):
 
 
 def get_active_and_finished_gws():
-    """Retrieves sets of gameweeks that have officially started or finished."""
+    """Safely retrieves sets of gameweeks that have started or finished directly from league matches."""
     started_gws = set()
     finished_gws = set()
-    
-    # Check Premier League static bootstrap for global GW status
-    bootstrap = fetch_json(BOOTSTRAP_URL)
-    if bootstrap and "events" in bootstrap:
-        for event in bootstrap["events"]:
-            gw_num = event.get("id")
-            if event.get("started"):
-                started_gws.add(gw_num)
-            if event.get("finished"):
-                finished_gws.add(gw_num)
 
-    # Cross-reference with League Details matches
     for l_id in [LEAGUE_1_ID, LEAGUE_2_ID]:
         data = fetch_json(LEAGUE_URL_FMT.format(l_id))
-        if data and "matches" in data:
-            for m in data["matches"]:
-                gw = m.get("event")
-                if m.get("started"):
-                    started_gws.add(gw)
-                if m.get("finished"):
-                    finished_gws.add(gw)
+        if data and isinstance(data, dict):
+            matches = data.get("matches", [])
+            for m in matches:
+                if isinstance(m, dict):
+                    gw = m.get("event")
+                    if m.get("started"):
+                        started_gws.add(gw)
+                    if m.get("finished"):
+                        finished_gws.add(gw)
 
     return started_gws, finished_gws
 
