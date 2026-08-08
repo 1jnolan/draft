@@ -251,11 +251,12 @@ st.subheader("🏆 Knockout")
 top_8 = sorted_teams[:8]  # Ranks 1 to 8
 
 def run_knockout_series(team_a_name, team_b_name, matchdays, et_gw, is_unlocked):
-    """Calculates multi-match knockout ties with score tracking & extra time."""
+    """Calculates multi-match knockout ties with score tracking & extra time always visible."""
     score_a, score_b = 0, 0
     records = []
     played_games = 0
 
+    # 1. Main Series Matchdays
     for gw in matchdays:
         is_active = (gw in started_gws or gw in finished_gws) and is_unlocked
         pa = scores.get(team_a_name, {}).get(gw, 0) if is_active else 0
@@ -284,27 +285,32 @@ def run_knockout_series(team_a_name, team_b_name, matchdays, et_gw, is_unlocked)
             "Team B Name": team_b_name
         })
 
-    # Extra Time logic if main games were played and tied
-    if played_games == len(matchdays) and score_a == score_b and is_unlocked:
-        is_et_active = et_gw in started_gws or et_gw in finished_gws
-        pa_et = scores.get(team_a_name, {}).get(et_gw, 0) if is_et_active else 0
-        pb_et = scores.get(team_b_name, {}).get(et_gw, 0) if is_et_active else 0
-        
-        if is_et_active:
-            if pa_et >= pb_et:
-                score_a += 1
-            else:
-                score_b += 1
+    # 2. Always Include Extra Time Row in Schedule
+    is_et_active = (et_gw in started_gws or et_gw in finished_gws) and is_unlocked
+    pa_et = scores.get(team_a_name, {}).get(et_gw, 0) if is_et_active else 0
+    pb_et = scores.get(team_b_name, {}).get(et_gw, 0) if is_et_active else 0
+    
+    is_tied_after_series = (played_games == len(matchdays)) and (score_a == score_b)
+    
+    if is_et_active and is_tied_after_series:
+        if pa_et >= pb_et:
+            score_a += 1
+            ga_et, gb_et = 1, 0
+        else:
+            score_b += 1
+            ga_et, gb_et = 0, 1
+    else:
+        ga_et, gb_et = "-", "-"
 
-        records.append({
-            "GW": f"GW {et_gw} (ET)",
-            "Team A Name": team_a_name,
-            "Team A Pts": pa_et if is_et_active else "-",
-            "Team A Score": 1 if pa_et >= pb_et and is_et_active else 0,
-            "Team B Score": 1 if pb_et > pa_et and is_et_active else 0,
-            "Team B Pts": pb_et if is_et_active else "-",
-            "Team B Name": team_b_name
-        })
+    records.append({
+        "GW": f"GW {et_gw} (ET)",
+        "Team A Name": team_a_name,
+        "Team A Pts": pa_et if (is_et_active and is_tied_after_series) else "-",
+        "Team A Score": ga_et,
+        "Team B Score": gb_et,
+        "Team B Pts": pb_et if (is_et_active and is_tied_after_series) else "-",
+        "Team B Name": team_b_name
+    })
 
     winner = team_a_name if score_a >= score_b else team_b_name
     return winner, pd.DataFrame(records)
@@ -331,13 +337,11 @@ qf_pairs = [
 ]
 
 winners_qf = {}
-cols_qf = st.columns(2)
-for idx, (t_a, t_b, code) in enumerate(qf_pairs):
+for t_a, t_b, code in qf_pairs:
     winner, df_series = run_knockout_series(t_a, t_b, [22, 23], 24, qf_unlocked)
     winners_qf[code] = winner if qf_unlocked else f"Winner of Tie {code}"
-    with cols_qf[idx % 2]:
-        st.markdown(f"**Tie {code}: {t_a} vs {t_b}**")
-        st.dataframe(df_series, use_container_width=True, hide_index=True)
+    st.markdown(f"**Tie {code}: {t_a} vs {t_b}**")
+    st.dataframe(df_series, use_container_width=True, hide_index=True)
 
 st.divider()
 
@@ -349,13 +353,11 @@ sf_pairs = [
 ]
 
 winners_sf = {}
-cols_sf = st.columns(2)
-for idx, (t_a, t_b, code) in enumerate(sf_pairs):
+for t_a, t_b, code in sf_pairs:
     winner, df_series = run_knockout_series(t_a, t_b, [27, 28, 29, 30], 31, sf_unlocked)
     winners_sf[code] = winner if sf_unlocked else f"Winner of Semi-Final {code}"
-    with cols_sf[idx]:
-        st.markdown(f"**Semi-Final {code}: {t_a} vs {t_b}**")
-        st.dataframe(df_series, use_container_width=True, hide_index=True)
+    st.markdown(f"**Semi-Final {code}: {t_a} vs {t_b}**")
+    st.dataframe(df_series, use_container_width=True, hide_index=True)
 
 st.divider()
 
