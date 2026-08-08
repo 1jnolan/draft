@@ -96,7 +96,7 @@ shuffled_teams = all_teams.copy()
 random.shuffle(shuffled_teams)
 
 # --- App Render ---
-st.title("🏆 Craft & Draft Association Cup")
+st.title("🏆 Craft & Draft League Cup")
 st.caption("16-Team Knockout Cup Competition | Single Game Weeks with Replays on Draw")
 
 
@@ -164,7 +164,6 @@ st.subheader("🥇 Round 1 (Gameweek 20 | Replay: Gameweek 21)")
 
 r1_unlocked = True
 r1_winners = []
-r1_cols = st.columns(2)
 
 for i in range(8):
     t_a = shuffled_teams[i * 2]
@@ -173,9 +172,8 @@ for i in range(8):
     winner, df_match = evaluate_cup_match(t_a, t_b, main_gw=20, replay_gw=21, is_unlocked=r1_unlocked)
     r1_winners.append(winner if 20 in finished_gws else f"Winner Match {i+1}")
     
-    with r1_cols[i % 2]:
-        st.markdown(f"**Match {i+1}: {t_a} vs {t_b}**")
-        st.dataframe(df_match, use_container_width=True, hide_index=True)
+    st.markdown(f"**Match {i+1}: {t_a} vs {t_b}**")
+    st.dataframe(df_match, use_container_width=True, hide_index=True)
 
 st.divider()
 
@@ -186,7 +184,6 @@ st.subheader("🥈 Quarter-Finals / Last 8 (Gameweek 25 | Replay: Gameweek 26)")
 
 qf_unlocked = 20 in finished_gws or 21 in finished_gws
 qf_winners = []
-qf_cols = st.columns(2)
 
 for i in range(4):
     t_a = r1_winners[i * 2]
@@ -195,9 +192,8 @@ for i in range(4):
     winner, df_match = evaluate_cup_match(t_a, t_b, main_gw=25, replay_gw=26, is_unlocked=qf_unlocked)
     qf_winners.append(winner if 25 in finished_gws else f"Winner QF {i+1}")
     
-    with qf_cols[i % 2]:
-        st.markdown(f"**QF Match {i+1}: {t_a} vs {t_b}**")
-        st.dataframe(df_match, use_container_width=True, hide_index=True)
+    st.markdown(f"**QF Match {i+1}: {t_a} vs {t_b}**")
+    st.dataframe(df_match, use_container_width=True, hide_index=True)
 
 st.divider()
 
@@ -208,7 +204,6 @@ st.subheader("🥉 Semi-Finals (Gameweek 29 | Replay: Gameweek 30)")
 
 sf_unlocked = 25 in finished_gws or 26 in finished_gws
 sf_winners = []
-sf_cols = st.columns(2)
 
 for i in range(2):
     t_a = qf_winners[i * 2]
@@ -217,9 +212,8 @@ for i in range(2):
     winner, df_match = evaluate_cup_match(t_a, t_b, main_gw=29, replay_gw=30, is_unlocked=sf_unlocked)
     sf_winners.append(winner if 29 in finished_gws else f"Winner SF {i+1}")
     
-    with sf_cols[i]:
-        st.markdown(f"**SF Match {i+1}: {t_a} vs {t_b}**")
-        st.dataframe(df_match, use_container_width=True, hide_index=True)
+    st.markdown(f"**SF Match {i+1}: {t_a} vs {t_b}**")
+    st.dataframe(df_match, use_container_width=True, hide_index=True)
 
 st.divider()
 
