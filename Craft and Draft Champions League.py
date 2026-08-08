@@ -190,7 +190,6 @@ for f in group_fixtures:
         
         status_str = "Finished" if gw in finished_gws else "Live"
     else:
-        # Match hasn't happened yet
         score_str = "v"
         status_str = "Scheduled"
 
@@ -245,22 +244,25 @@ st.dataframe(df_results, use_container_width=True, hide_index=True, height=400)
 st.divider()
 
 # =========================================================
-# 3. KNOCKOUT STAGE COMPONENT (TOP 8 TEAMS)
+# 3. KNOCKOUT STAGE COMPONENT
 # =========================================================
-st.subheader("🏆 Knockout Stage (World Cup Style)")
+st.subheader("🏆 Knockout")
 
 top_8 = sorted_teams[:8]  # Ranks 1 to 8
 
-def run_knockout_series(team_a, team_b, matchdays, et_gw):
+def run_knockout_series(team_a_name, team_b_name, matchdays, et_gw, is_unlocked):
+    """Calculates multi-match knockout ties with score tracking & extra time."""
     score_a, score_b = 0, 0
     records = []
+    played_games = 0
 
     for gw in matchdays:
-        is_active = gw in started_gws or gw in finished_gws
-        pa = scores[team_a][gw] if is_active else 0
-        pb = scores[team_b][gw] if is_active else 0
+        is_active = (gw in started_gws or gw in finished_gws) and is_unlocked
+        pa = scores.get(team_a_name, {}).get(gw, 0) if is_active else 0
+        pb = scores.get(team_b_name, {}).get(gw, 0) if is_active else 0
         
         if is_active:
+            played_games += 1
             if pa > pb:
                 ga, gb = 1, 0
                 score_a += 1
@@ -273,33 +275,93 @@ def run_knockout_series(team_a, team_b, matchdays, et_gw):
             ga, gb = "-", "-"
 
         records.append({
-            "GW": gw,
-            "Team A Name": team_a,
+            "GW": f"GW {gw}",
+            "Team A Name": team_a_name,
             "Team A Pts": pa if is_active else "-",
             "Team A Score": ga,
             "Team B Score": gb,
             "Team B Pts": pb if is_active else "-",
-            "Team B Name": team_b
+            "Team B Name": team_b_name
         })
 
-    winner = team_a if score_a >= score_b else team_b
+    # Extra Time logic if main games were played and tied
+    if played_games == len(matchdays) and score_a == score_b and is_unlocked:
+        is_et_active = et_gw in started_gws or et_gw in finished_gws
+        pa_et = scores.get(team_a_name, {}).get(et_gw, 0) if is_et_active else 0
+        pb_et = scores.get(team_b_name, {}).get(et_gw, 0) if is_et_active else 0
+        
+        if is_et_active:
+            if pa_et >= pb_et:
+                score_a += 1
+            else:
+                score_b += 1
+
+        records.append({
+            "GW": f"GW {et_gw} (ET)",
+            "Team A Name": team_a_name,
+            "Team A Pts": pa_et if is_et_active else "-",
+            "Team A Score": 1 if pa_et >= pb_et and is_et_active else 0,
+            "Team B Score": 1 if pb_et > pa_et and is_et_active else 0,
+            "Team B Pts": pb_et if is_et_active else "-",
+            "Team B Name": team_b_name
+        })
+
+    winner = team_a_name if score_a >= score_b else team_b_name
     return winner, pd.DataFrame(records)
 
 
-# --- QUARTER FINALS ---
+# --- CHECK ROUND UNLOCK STATUS ---
+# QF unlocks after Group Phase ends (GW18 finished)
+qf_unlocked = 18 in finished_gws
+
+# SF unlocks after QF ends (GW23 finished)
+sf_unlocked = 23 in finished_gws
+
+# Final unlocks after SF ends (GW30 finished)
+final_unlocked = 30 in finished_gws
+
+
+# --- QUARTER-FINALS (GW22 & GW23, ET GW24) ---
 st.markdown("### Quarter-Finals (Round 2)")
 qf_pairs = [
-    (top_8[7], top_8[0], "A"),
-    (top_8[4], top_8[3], "B"),
-    (top_8[5], top_8[2], "C"),
-    (top_8[6], top_8[1], "D")
+    (top_8[7] if qf_unlocked else "8th Place", top_8[0] if qf_unlocked else "1st Place", "A"),
+    (top_8[4] if qf_unlocked else "5th Place", top_8[3] if qf_unlocked else "4th Place", "B"),
+    (top_8[5] if qf_unlocked else "6th Place", top_8[2] if qf_unlocked else "3rd Place", "C"),
+    (top_8[6] if qf_unlocked else "7th Place", top_8[1] if qf_unlocked else "2nd Place", "D")
 ]
 
 winners_qf = {}
-cols = st.columns(2)
+cols_qf = st.columns(2)
 for idx, (t_a, t_b, code) in enumerate(qf_pairs):
-    winner, df_series = run_knockout_series(t_a, t_b, [22, 23], 24)
-    winners_qf[code] = winner
-    with cols[idx % 2]:
+    winner, df_series = run_knockout_series(t_a, t_b, [22, 23], 24, qf_unlocked)
+    winners_qf[code] = winner if qf_unlocked else f"Winner of Tie {code}"
+    with cols_qf[idx % 2]:
         st.markdown(f"**Tie {code}: {t_a} vs {t_b}**")
         st.dataframe(df_series, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# --- SEMI-FINALS (GW27 to GW30, ET GW31) ---
+st.markdown("### Semi-Finals (Round 3)")
+sf_pairs = [
+    (winners_qf["A"], winners_qf["C"], "X"),  # Winner A vs Winner C
+    (winners_qf["B"], winners_qf["D"], "Y")   # Winner B vs Winner D
+]
+
+winners_sf = {}
+cols_sf = st.columns(2)
+for idx, (t_a, t_b, code) in enumerate(sf_pairs):
+    winner, df_series = run_knockout_series(t_a, t_b, [27, 28, 29, 30], 31, sf_unlocked)
+    winners_sf[code] = winner if sf_unlocked else f"Winner of Semi-Final {code}"
+    with cols_sf[idx]:
+        st.markdown(f"**Semi-Final {code}: {t_a} vs {t_b}**")
+        st.dataframe(df_series, use_container_width=True, hide_index=True)
+
+st.divider()
+
+# --- FINAL (GW34 to GW37, ET GW38) ---
+st.markdown("### 🏆 Champions League Final")
+final_winner, df_final = run_knockout_series(winners_sf["X"], winners_sf["Y"], [34, 35, 36, 37], 38, final_unlocked)
+
+st.markdown(f"**Final: {winners_sf['X']} vs {winners_sf['Y']}**")
+st.dataframe(df_final, use_container_width=True, hide_index=True)
