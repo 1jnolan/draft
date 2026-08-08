@@ -9,7 +9,7 @@ st.set_page_config(page_title="Drafted Players Tracker", layout="wide")
 # Auto-refresh every 15 seconds
 st_autorefresh(interval=15000, key="fpl_refresh_draft_choices")
 
-LEAGUE_ID = 858
+LEAGUE_ID = 82158
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 LEAGUE_URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
