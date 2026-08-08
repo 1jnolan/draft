@@ -25,6 +25,35 @@ def fetch_json(url):
         return None
 
 
+def get_active_and_finished_gws():
+    """Retrieves sets of gameweeks that have officially started or finished."""
+    started_gws = set()
+    finished_gws = set()
+    
+    # Check Premier League static bootstrap for global GW status
+    bootstrap = fetch_json(BOOTSTRAP_URL)
+    if bootstrap and "events" in bootstrap:
+        for event in bootstrap["events"]:
+            gw_num = event.get("id")
+            if event.get("started"):
+                started_gws.add(gw_num)
+            if event.get("finished"):
+                finished_gws.add(gw_num)
+
+    # Cross-reference with League Details matches
+    for l_id in [LEAGUE_1_ID, LEAGUE_2_ID]:
+        data = fetch_json(LEAGUE_URL_FMT.format(l_id))
+        if data and "matches" in data:
+            for m in data["matches"]:
+                gw = m.get("event")
+                if m.get("started"):
+                    started_gws.add(gw)
+                if m.get("finished"):
+                    finished_gws.add(gw)
+
+    return started_gws, finished_gws
+
+
 def get_all_teams():
     """Fetch teams from both leagues (8 each) with placeholders if < 8 registered."""
     teams = []
@@ -89,27 +118,6 @@ def get_gw_team_points(teams):
     return scores, season_pts
 
 
-def get_transaction_counts(teams):
-    """Fetch transactions per manager for tiebreakers."""
-    tx_counts = {t["name"]: 0 for t in teams}
-    for l_id in [LEAGUE_1_ID, LEAGUE_2_ID]:
-        data = fetch_json(LEAGUE_URL_FMT.format(l_id))
-        tx_data = fetch_json(TX_URL_FMT.format(l_id))
-        if not data or not tx_data:
-            continue
-            
-        entry_map = {e["id"]: f"{e['entry_name']} ({e['player_first_name']} {e['player_last_name']})" 
-                     for e in data.get("league_entries", [])}
-        
-        for tx in tx_data.get("transactions", []):
-            e_id = tx.get("entry")
-            t_name = entry_map.get(e_id)
-            if t_name in tx_counts:
-                tx_counts[t_name] += 1
-                
-    return tx_counts
-
-
 def generate_round_robin_fixtures(team_names):
     """Generates 15 matchdays (GW4 to GW18) using circle method algorithm."""
     n = len(team_names)
@@ -142,10 +150,10 @@ def generate_round_robin_fixtures(team_names):
 
 
 # --- Load Base Data ---
+started_gws, finished_gws = get_active_and_finished_gws()
 teams = get_all_teams()
 team_names = [t["name"] for t in teams]
 scores, season_pts = get_gw_team_points(teams)
-tx_counts = get_transaction_counts(teams)
 group_fixtures = generate_round_robin_fixtures(team_names)
 
 # --- App Render ---
@@ -153,7 +161,6 @@ st.title("Craft & Draft Champions League Group Phase")
 
 # 1. PROCESS GROUP FIXTURES & RESULTS TABLE
 results_data = []
-h2h_matrix = {t: {opp: 0 for opp in team_names} for t in team_names}
 group_stats = {t: {"Played": 0, "Wins": 0, "Draws": 0, "Losses": 0, "Points For": 0, "Points": 0} for t in team_names}
 
 for f in group_fixtures:
@@ -165,41 +172,47 @@ for f in group_fixtures:
     h_pts = scores[home][gw]
     a_pts = scores[away][gw]
     
-    # Track points for group stage (GW4 to GW18 inclusive)
-    group_stats[home]["Points For"] += h_pts
-    group_stats[away]["Points For"] += a_pts
-    group_stats[home]["Played"] += 1
-    group_stats[away]["Played"] += 1
+    # Check if Gameweek has started or finished
+    is_active = gw in started_gws or gw in finished_gws
 
-    if h_pts > a_pts:
-        score_str = f"1 - 0"
-        group_stats[home]["Wins"] += 1
-        group_stats[home]["Points"] += 3
-        group_stats[away]["Losses"] += 1
-        h2h_matrix[home][away] += 3
-    elif a_pts > h_pts:
-        score_str = f"0 - 1"
-        group_stats[away]["Wins"] += 1
-        group_stats[away]["Points"] += 3
-        group_stats[home]["Losses"] += 1
-        h2h_matrix[away][home] += 3
+    if is_active:
+        group_stats[home]["Points For"] += h_pts
+        group_stats[away]["Points For"] += a_pts
+        group_stats[home]["Played"] += 1
+        group_stats[away]["Played"] += 1
+
+        if h_pts > a_pts:
+            score_str = "1 - 0"
+            group_stats[home]["Wins"] += 1
+            group_stats[home]["Points"] += 3
+            group_stats[away]["Losses"] += 1
+        elif a_pts > h_pts:
+            score_str = "0 - 1"
+            group_stats[away]["Wins"] += 1
+            group_stats[away]["Points"] += 3
+            group_stats[home]["Losses"] += 1
+        else:
+            score_str = "0 - 0 (Draw)"
+            group_stats[home]["Draws"] += 1
+            group_stats[home]["Points"] += 1
+            group_stats[away]["Draws"] += 1
+            group_stats[away]["Points"] += 1
+        
+        status_str = "Finished" if gw in finished_gws else "Live"
     else:
-        score_str = f"0 - 0 (Draw)"
-        group_stats[home]["Draws"] += 1
-        group_stats[home]["Points"] += 1
-        group_stats[away]["Draws"] += 1
-        group_stats[away]["Points"] += 1
-        h2h_matrix[home][away] += 1
-        h2h_matrix[away][home] += 1
+        # Match hasn't happened yet
+        score_str = "v"
+        status_str = "Scheduled"
 
     results_data.append({
         "Gameweek": gw,
         "Matchday": md,
         "Home Team": home,
-        "Total Points (H)": h_pts,
+        "Total Points (H)": h_pts if is_active else "-",
         "Away Team": away,
-        "Total Points (A)": a_pts,
-        "Score": score_str
+        "Total Points (A)": a_pts if is_active else "-",
+        "Score": score_str,
+        "Status": status_str
     })
 
 df_results = pd.DataFrame(results_data)
@@ -207,10 +220,7 @@ df_results = pd.DataFrame(results_data)
 # 2. SORT GROUP STANDINGS TIEBREAKERS
 def standings_sort_key(t_name):
     s = group_stats[t_name]
-    pts = s["Points"]
-    pf = s["Points For"]
-    overall_pf = season_pts.get(t_name, 0)
-    return (pts, pf, overall_pf)
+    return (s["Points"], s["Points For"], season_pts.get(t_name, 0), t_name)
 
 sorted_teams = sorted(team_names, key=standings_sort_key, reverse=True)
 
@@ -252,85 +262,47 @@ st.subheader("🏆 Knockout Stage (World Cup Style)")
 top_8 = sorted_teams[:8]  # Ranks 1 to 8
 
 def run_knockout_series(team_a, team_b, matchdays, et_gw):
-    """Executes multi-week knockout tie logic with goals & extra time."""
     score_a, score_b = 0, 0
-    total_pts_a, total_pts_b = 0, 0
     records = []
 
-    for round_num, gw in enumerate(matchdays, 1):
-        pa = scores[team_a][gw]
-        pb = scores[team_b][gw]
-        total_pts_a += pa
-        total_pts_b += pb
+    for gw in matchdays:
+        is_active = gw in started_gws or gw in finished_gws
+        pa = scores[team_a][gw] if is_active else 0
+        pb = scores[team_b][gw] if is_active else 0
         
-        if pa > pb:
-            ga, gb = 1, 0
-            score_a += 1
-        elif pb > pa:
-            ga, gb = 0, 1
-            score_b += 1
+        if is_active:
+            if pa > pb:
+                ga, gb = 1, 0
+                score_a += 1
+            elif pb > pa:
+                ga, gb = 0, 1
+                score_b += 1
+            else:
+                ga, gb = 0, 0
         else:
-            ga, gb = 0, 0
+            ga, gb = "-", "-"
 
         records.append({
             "GW": gw,
             "Team A Name": team_a,
-            "Team A Pts": pa,
+            "Team A Pts": pa if is_active else "-",
             "Team A Score": ga,
             "Team B Score": gb,
-            "Team B Pts": pb,
+            "Team B Pts": pb if is_active else "-",
             "Team B Name": team_b
         })
 
-    # Extra Time check if tied after main matchdays
-    winner = None
-    if score_a > score_b:
-        winner = team_a
-    elif score_b > score_a:
-        winner = team_b
-    else:
-        # Extra Time GW
-        pa_et = scores[team_a][et_gw]
-        pb_et = scores[team_b][et_gw]
-        total_pts_a += pa_et
-        total_pts_b += pb_et
-        
-        if pa_et > pb_et:
-            score_a += 1
-            winner = team_a
-        elif pb_et > pa_et:
-            score_b += 1
-            winner = team_b
-        else:
-            # Total points tiebreaker
-            if total_pts_a > total_pts_b:
-                winner = team_a
-            elif total_pts_b > total_pts_a:
-                winner = team_b
-            else:
-                # Total season points tiebreaker
-                winner = team_a if season_pts.get(team_a, 0) >= season_pts.get(team_b, 0) else team_b
-
-        records.append({
-            "GW": f"{et_gw} (ET)",
-            "Team A Name": team_a,
-            "Team A Pts": pa_et,
-            "Team A Score": 1 if winner == team_a else 0,
-            "Team B Score": 1 if winner == team_b else 0,
-            "Team B Pts": pb_et,
-            "Team B Name": team_b
-        })
-
+    winner = team_a if score_a >= score_b else team_b
     return winner, pd.DataFrame(records)
 
 
-# --- QUARTER FINALS (GW22 & GW23, ET GW24) ---
+# --- QUARTER FINALS ---
 st.markdown("### Quarter-Finals (Round 2)")
 qf_pairs = [
-    (top_8[7], top_8[0], "A"),  # 8th vs 1st
-    (top_8[4], top_8[3], "B"),  # 5th vs 4th
-    (top_8[5], top_8[2], "C"),  # 6th vs 3rd
-    (top_8[6], top_8[1], "D")   # 7th vs 2nd
+    (top_8[7], top_8[0], "A"),
+    (top_8[4], top_8[3], "B"),
+    (top_8[5], top_8[2], "C"),
+    (top_8[6], top_8[1], "D")
 ]
 
 winners_qf = {}
@@ -339,29 +311,5 @@ for idx, (t_a, t_b, code) in enumerate(qf_pairs):
     winner, df_series = run_knockout_series(t_a, t_b, [22, 23], 24)
     winners_qf[code] = winner
     with cols[idx % 2]:
-        st.markdown(f"**Tie {code}: {t_a} vs {t_b}** $\\rightarrow$ **Winner: {winner}**")
+        st.markdown(f"**Tie {code}: {t_a} vs {t_b}**")
         st.dataframe(df_series, use_container_width=True, hide_index=True)
-
-
-# --- SEMI FINALS (GW27 to GW30, ET GW31) ---
-st.markdown("### Semi-Finals (Round 3)")
-sf_pairs = [
-    (winners_qf["A"], winners_qf["C"], "X"),
-    (winners_qf["B"], winners_qf["D"], "Y")
-]
-
-winners_sf = {}
-cols_sf = st.columns(2)
-for idx, (t_a, t_b, code) in enumerate(sf_pairs):
-    winner, df_series = run_knockout_series(t_a, t_b, [27, 28, 29, 30], 31)
-    winners_sf[code] = winner
-    with cols_sf[idx]:
-        st.markdown(f"**Semi-Final {code}: {t_a} vs {t_b}** $\\rightarrow$ **Winner: {winner}**")
-        st.dataframe(df_series, use_container_width=True, hide_index=True)
-
-
-# --- FINALS (GW34 to GW37, ET GW38) ---
-st.markdown("### 🏆 Champions League Final")
-final_winner, df_final = run_knockout_series(winners_sf["X"], winners_sf["Y"], [34, 35, 36, 37], 38)
-st.success(f"🎉 **CRAFT & DRAFT CHAMPIONS LEAGUE WINNER: {final_winner}**")
-st.dataframe(df_final, use_container_width=True, hide_index=True)
