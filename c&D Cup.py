@@ -96,7 +96,7 @@ shuffled_teams = all_teams.copy()
 random.shuffle(shuffled_teams)
 
 # --- App Render ---
-st.title("🏆 Craft & Draft League Cup")
+st.title("🏆 Craft & Draft Association Cup")
 st.caption("16-Team Knockout Cup Competition | Single Game Weeks with Replays on Draw")
 
 
