@@ -5,7 +5,8 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- Streamlit Page Config ---
 st.set_page_config(page_title="Craft & Draft Champions League", layout="wide")
-st_autorefresh(interval=10000, key="cd_cl_refresh")
+# Set autorefresh to 60s (prevents Streamlit memory crashes)
+st_autorefresh(interval=60000, key="cd_cl_refresh")
 
 LEAGUE_1_ID = 858
 LEAGUE_2_ID = 4159
@@ -15,7 +16,7 @@ LEAGUE_URL_FMT = "https://draft.premierleague.com/api/league/{}/details"
 TX_URL_FMT = "https://draft.premierleague.com/api/draft/league/{}/transactions"
 
 
-@st.cache_data(ttl=5)
+@st.cache_data(ttl=15)
 def fetch_json(url):
     try:
         res = requests.get(url, headers=HEADERS, timeout=10)
@@ -25,7 +26,7 @@ def fetch_json(url):
 
 
 def get_active_and_finished_gws():
-    """Safely retrieves sets of gameweeks that have started or finished directly from league matches."""
+    """Safely retrieves sets of gameweeks that have started or finished."""
     started_gws = set()
     finished_gws = set()
 
@@ -45,16 +46,15 @@ def get_active_and_finished_gws():
 
 
 def get_all_teams():
-    """Fetch teams from both leagues (8 each) with placeholders if < 8 registered."""
+    """Fetch teams from both leagues with guaranteed 16 team fallback."""
     teams = []
     for l_id in [LEAGUE_1_ID, LEAGUE_2_ID]:
         data = fetch_json(LEAGUE_URL_FMT.format(l_id))
-        league_entries = data.get("league_entries", []) if data else []
+        league_entries = data.get("league_entries", []) if (data and isinstance(data, dict)) else []
         
-        # Pull registered entries
         for e in league_entries:
-            t_name = f"{e['entry_name']} ({e['player_first_name']} {e['player_last_name']})"
-            e_id = e["id"]
+            t_name = f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+            e_id = e.get("id")
             teams.append({
                 "league_id": l_id,
                 "entry_id": e_id,
@@ -62,7 +62,6 @@ def get_all_teams():
                 "is_placeholder": False
             })
         
-        # Fill missing up to 8 with placeholders
         registered_count = len(league_entries)
         for p in range(registered_count + 1, 9):
             teams.append({
@@ -72,6 +71,15 @@ def get_all_teams():
                 "is_placeholder": True
             })
             
+    # Guarantee at least 16 entries to avoid IndexError
+    while len(teams) < 16:
+        teams.append({
+            "league_id": 0,
+            "entry_id": None,
+            "name": f"Placeholder Team {len(teams)+1}",
+            "is_placeholder": True
+        })
+        
     return teams[:16]
 
 
@@ -82,28 +90,30 @@ def get_gw_team_points(teams):
 
     for l_id in [LEAGUE_1_ID, LEAGUE_2_ID]:
         data = fetch_json(LEAGUE_URL_FMT.format(l_id))
-        if not data:
+        if not data or not isinstance(data, dict):
             continue
             
         matches = data.get("matches", [])
-        entry_map = {e["id"]: f"{e['entry_name']} ({e['player_first_name']} {e['player_last_name']})" 
-                     for e in data.get("league_entries", [])}
+        entry_map = {
+            e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})" 
+            for e in data.get("league_entries", []) if isinstance(e, dict)
+        }
         
-        # Standings for overall total season points tiebreaker
         for s in data.get("standings", []):
             t_name = entry_map.get(s.get("league_entry"))
             if t_name in season_pts:
                 season_pts[t_name] = s.get("points_for", 0)
 
         for m in matches:
-            gw = m.get("event")
-            if gw and 1 <= gw <= 38:
-                e1 = entry_map.get(m.get("league_entry_1"))
-                e2 = entry_map.get(m.get("league_entry_2"))
-                if e1 in scores:
-                    scores[e1][gw] += m.get("league_entry_1_points", 0)
-                if e2 in scores:
-                    scores[e2][gw] += m.get("league_entry_2_points", 0)
+            if isinstance(m, dict):
+                gw = m.get("event")
+                if gw and 1 <= gw <= 38:
+                    e1 = entry_map.get(m.get("league_entry_1"))
+                    e2 = entry_map.get(m.get("league_entry_2"))
+                    if e1 in scores:
+                        scores[e1][gw] += m.get("league_entry_1_points", 0)
+                    if e2 in scores:
+                        scores[e2][gw] += m.get("league_entry_2_points", 0)
 
     return scores, season_pts
 
@@ -115,12 +125,11 @@ def generate_round_robin_fixtures(team_names):
     fixtures = []
 
     for md in range(1, n):
-        gw = md + 3  # Starts at GW4 (MD1) -> GW18 (MD15)
+        gw = md + 3  # GW4 to GW18
         for i in range(n // 2):
             t1 = teams[i]
             t2 = teams[n - 1 - i]
             
-            # Alternate home/away each matchday
             if md % 2 == 0:
                 home, away = t1, t2
             else:
@@ -133,7 +142,6 @@ def generate_round_robin_fixtures(team_names):
                 "Away Team": away
             })
             
-        # Rotate teams for round-robin
         teams = [teams[0]] + [teams[-1]] + teams[1:-1]
         
     return fixtures
@@ -159,10 +167,9 @@ for f in group_fixtures:
     home = f["Home Team"]
     away = f["Away Team"]
     
-    h_pts = scores[home][gw]
-    a_pts = scores[away][gw]
+    h_pts = scores.get(home, {}).get(gw, 0)
+    a_pts = scores.get(away, {}).get(gw, 0)
     
-    # Check if Gameweek has started or finished
     is_active = gw in started_gws or gw in finished_gws
 
     if is_active:
@@ -213,7 +220,6 @@ def standings_sort_key(t_name):
 
 sorted_teams = sorted(team_names, key=standings_sort_key, reverse=True)
 
-# Format Standings Dataframe
 standings_rows = []
 for idx, name in enumerate(sorted_teams, 1):
     st_data = group_stats[name]
@@ -248,15 +254,14 @@ st.divider()
 # =========================================================
 st.subheader("🏆 Knockout")
 
-top_8 = sorted_teams[:8]  # Ranks 1 to 8
+# Safe slice guaranteeing 8 items
+top_8 = sorted_teams[:8] if len(sorted_teams) >= 8 else sorted_teams + [f"Seed {i+1}" for i in range(len(sorted_teams), 8)]
 
 def run_knockout_series(team_a_name, team_b_name, matchdays, et_gw, is_unlocked):
-    """Calculates multi-match knockout ties. Extra Time ONLY displays if required."""
     score_a, score_b = 0, 0
     records = []
     played_games = 0
 
-    # 1. Regular Matchdays
     for gw in matchdays:
         is_active = (gw in started_gws or gw in finished_gws) and is_unlocked
         pa = scores.get(team_a_name, {}).get(gw, 0) if is_active else 0
@@ -285,7 +290,6 @@ def run_knockout_series(team_a_name, team_b_name, matchdays, et_gw, is_unlocked)
             "Team B Name": team_b_name
         })
 
-    # 2. Check if Extra Time is Needed (All regular matches finished and series is tied)
     is_tied_after_series = (played_games == len(matchdays)) and (score_a == score_b)
     
     if is_tied_after_series:
@@ -303,7 +307,6 @@ def run_knockout_series(team_a_name, team_b_name, matchdays, et_gw, is_unlocked)
         else:
             ga_et, gb_et = "-", "-"
 
-        # Add ET row ONLY when needed
         records.append({
             "GW": f"GW {et_gw} (ET)",
             "Team A Name": team_a_name,
@@ -377,7 +380,7 @@ st.dataframe(df_final, use_container_width=True, hide_index=True)
 
 st.divider()
 
-# --- STAND-ALONE WINNER BANNER (PLACED AT THE VERY BOTTOM) ---
+# --- STAND-ALONE WINNER BANNER ---
 is_final_complete = final_unlocked and (37 in finished_gws or 38 in finished_gws)
 display_winner = final_winner if is_final_complete else "????"
 
