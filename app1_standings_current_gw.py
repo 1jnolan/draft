@@ -3,8 +3,8 @@ import requests
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="Current Gameweek Fixtures", layout="wide")
-st_autorefresh(interval=30000, key="fpl_refresh_cur_gw")
+st.set_page_config(page_title="League Standings & Fixtures", layout="wide")
+st_autorefresh(interval=30000, key="fpl_refresh_league_full")
 
 LEAGUE_ID = 858
 URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
@@ -24,22 +24,19 @@ def fetch_json(url):
 data = fetch_json(URL)
 
 if data and isinstance(data, dict):
-    # 1. Accurately detect Current Gameweek from FPL official metadata
+    # 1. Accurately detect Current Gameweek
     league_info = data.get("league", {})
     current_gw = league_info.get("current_event")
 
-    # Fallback to bootstrap /game endpoint if current_event is null/missing
     if not current_gw:
         game_data = fetch_json(BOOTSTRAP_URL)
         if game_data and isinstance(game_data, dict):
             current_gw = game_data.get("current_event")
 
-    # Final safety fallback to GW1
     if not current_gw:
         current_gw = 1
 
-    st.subheader("📅 Current Gameweek Fixtures & Scores")
-
+    # Map team names and manager names
     entries = data.get("league_entries", [])
     entry_map = {
         e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
@@ -47,9 +44,54 @@ if data and isinstance(data, dict):
         if isinstance(e, dict)
     }
 
-    matches_raw = data.get("matches", [])
+    # ==========================================
+    # 1. LEAGUE STANDINGS TABLE
+    # ==========================================
+    st.subheader(f"🏆 {league_info.get('name', 'League')} Standings")
 
+    standings_raw = data.get("standings", [])
+    standings_rows = []
+
+    for s in standings_raw:
+        if not isinstance(s, dict):
+            continue
+
+        e_id = s.get("league_entry")
+        team_display = entry_map.get(e_id, f"Team {e_id}")
+
+        standings_rows.append({
+            "Rank": s.get("rank", "-"),
+            "Team & Manager": team_display,
+            "Played": s.get("matches_played", 0),
+            "Won": s.get("matches_won", 0),
+            "Drawn": s.get("matches_drawn", 0),
+            "Lost": s.get("matches_lost", 0),
+            "Points For": s.get("points_for", 0),
+            "Points Against": s.get("points_against", 0),
+            "Total Pts": s.get("total", 0),
+        })
+
+    df_standings = pd.DataFrame(standings_rows)
+
+    if not df_standings.empty:
+        # Sort by rank
+        df_standings.sort_values(by=["Rank"], inplace=True)
+        st.dataframe(
+            df_standings, use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("Standings will appear once matches have commenced.")
+
+    st.divider()
+
+    # ==========================================
+    # 2. FIXTURES & SCORES TABLE
+    # ==========================================
+    st.subheader("📅 Fixtures & Scores")
+
+    matches_raw = data.get("matches", [])
     fixtures_list = []
+
     for m in matches_raw:
         if not isinstance(m, dict):
             continue
@@ -90,7 +132,6 @@ if data and isinstance(data, dict):
     if not df_fixtures.empty:
         df_fixtures.sort_values(by=["GW", "Home Team"], inplace=True)
 
-        # 2. Build Gameweek list and set default to current_gw
         unique_gws = sorted(
             [int(g) for g in df_fixtures["GW"].dropna().unique()]
         )
@@ -113,9 +154,10 @@ if data and isinstance(data, dict):
             selected_gw_num = int(selected_option.replace("Gameweek ", ""))
             df_display = df_fixtures[df_fixtures["GW"] == selected_gw_num]
 
-        st.caption(f"Showing live updates for **{selected_option}**")
+        st.caption(f"Showing live fixtures for **{selected_option}**")
         st.dataframe(
-            df_display, use_container_width=True, hide_index=True, height=450
+            df_display, use_container_width=True, hide_index=True, height=350
         )
+
 else:
     st.error("Failed to load league data from FPL Draft API.")
