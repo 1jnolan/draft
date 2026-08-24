@@ -6,14 +6,14 @@ from streamlit_autorefresh import st_autorefresh
 # --- Page Setup ---
 st.set_page_config(page_title="Craft & Draft Squad & Player Analytics", layout="wide")
 
-# Auto-refresh every 60 seconds (prevents memory leaks on cloud runners)
+# Auto-refresh every 60 seconds
 st_autorefresh(interval=60000, key="cnd_player_analysis_refresh")
 
-LEAGUE_ID = 858
+LEAGUE_IDS = [858, 4159]
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 BOOTSTRAP_URL = "https://draft.premierleague.com/api/bootstrap-static"
-LEAGUE_URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
+LEAGUE_URL_FMT = "https://draft.premierleague.com/api/league/{}/details"
 GAME_URL = "https://draft.premierleague.com/api/game"
 ENTRY_BASE_URL = "https://draft.premierleague.com/api/entry/{}/event/{}"
 
@@ -66,7 +66,7 @@ def load_bootstrap_data():
                     "minutes": el.get("minutes", 0),
                 }
 
-        # 4. Safe Gameweek Extraction (Fixes AttributeError)
+        # 4. Safe Gameweek Extraction
         events_obj = data.get("events")
         events_raw = []
         if isinstance(events_obj, dict):
@@ -80,29 +80,32 @@ def load_bootstrap_data():
             if isinstance(e, dict) and e.get("finished") and "id" in e
         ]
 
-    # Fallback to GW1 if no GWs finished yet
     if not finished_gws:
         finished_gws = [1]
 
     return elements_map, positions_map, teams_map, sorted(finished_gws)
 
 
-def get_league_entries():
-    """Retrieve managers and team mappings from the league details endpoint."""
-    league_data = fetch_json(LEAGUE_URL)
-    entries = []
-    if league_data and isinstance(league_data, dict):
-        raw_entries = league_data.get("league_entries", [])
-        for e in raw_entries:
-            if isinstance(e, dict):
-                entries.append({
-                    "id": e.get("id"),
-                    "entry_id": e.get("entry_id"),
-                    "manager_name": f"{e.get('player_first_name', '')} {e.get('player_last_name', '')}".strip(),
-                    "team_name": e.get("entry_name", "Team"),
-                    "display_name": f"{e.get('entry_name')} ({e.get('player_first_name')} {e.get('player_last_name')})",
-                })
-    return entries
+def get_all_league_entries():
+    """Retrieve managers and team mappings across both leagues."""
+    all_entries = []
+    for l_id in LEAGUE_IDS:
+        league_data = fetch_json(LEAGUE_URL_FMT.format(l_id))
+        if league_data and isinstance(league_data, dict):
+            l_name = league_data.get("league", {}).get("name", f"League {l_id}")
+            raw_entries = league_data.get("league_entries", [])
+            for e in raw_entries:
+                if isinstance(e, dict):
+                    all_entries.append({
+                        "id": e.get("id"),
+                        "entry_id": e.get("entry_id"),
+                        "league_id": l_id,
+                        "league_name": l_name,
+                        "manager_name": f"{e.get('player_first_name', '')} {e.get('player_last_name', '')}".strip(),
+                        "team_name": e.get("entry_name", "Team"),
+                        "display_name": f"{e.get('entry_name')} ({e.get('player_first_name')} {e.get('player_last_name')})",
+                    })
+    return all_entries
 
 
 def analyze_squad_usage(entries, player_map, finished_gws):
@@ -118,7 +121,6 @@ def analyze_squad_usage(entries, player_map, finished_gws):
         benched_points = 0
         active_lineup_count = 0
 
-        # Sample the most recent finished gameweeks (up to last 5 to keep requests fast)
         recent_gws = finished_gws[-5:] if len(finished_gws) > 5 else finished_gws
 
         for gw in recent_gws:
@@ -133,8 +135,7 @@ def analyze_squad_usage(entries, player_map, finished_gws):
                 p_id = p.get("element")
                 pos_order = p.get("position", 1)  # 1-11 starter, 12-15 bench
                 p_info = player_map.get(p_id, {})
-                
-                # Use total points divided by GW span as proxy if live pick pts unavailable
+
                 approx_pts = p_info.get("total_points", 0) / max(len(finished_gws), 1)
 
                 if pos_order <= 11:
@@ -149,6 +150,7 @@ def analyze_squad_usage(entries, player_map, finished_gws):
         )
 
         squad_stats.append({
+            "League": f"L{entry['league_id']}",
             "Manager": entry["display_name"],
             "Team": entry["team_name"],
             "Starting Squad Contribution (Est Pts)": round(started_points, 1),
@@ -161,12 +163,12 @@ def analyze_squad_usage(entries, player_map, finished_gws):
 
 # --- App Header ---
 st.title("📊 Craft & Draft Squad & Player Analytics")
-st.caption(f"Target League: **{LEAGUE_ID}**")
+st.caption("Combined Multi-League Analytics across **League 858** & **League 4159**")
 
 player_map, pos_map, team_map, finished_gws = load_bootstrap_data()
-entries = get_league_entries()
+all_entries = get_all_league_entries()
 
-if player_map and entries:
+if player_map and all_entries:
     # 1. Global Player Database View
     st.subheader("⚽ Premier League Player Pool Performance")
 
@@ -186,7 +188,6 @@ if player_map and entries:
 
     df_players = pd.DataFrame(player_records)
 
-    # Filtering Controls
     c1, c2, c3 = st.columns(3)
     pos_filter = c1.selectbox(
         "Position Filter:", ["All Positions"] + sorted(list(pos_map.values()))
@@ -211,17 +212,30 @@ if player_map and entries:
 
     df_filtered_players.sort_values(by="Total Points", ascending=False, inplace=True)
     st.dataframe(
-        df_filtered_players, use_container_width=True, hide_index=True, height=450
+        df_filtered_players, use_container_width=True, hide_index=True, height=400
     )
 
     st.divider()
 
-    # 2. Squad Usage & Starting Lineup Efficiency
+    # 2. Multi-League Squad Usage & Starting Lineup Efficiency
     st.subheader("🧠 Manager Lineup Selection & Squad Usage")
     st.caption("Analyzes starting lineup optimization vs points left on the bench.")
 
-    with st.spinner("Analyzing recent manager squad selections..."):
-        df_squad_usage = analyze_squad_usage(entries, player_map, finished_gws)
+    # Filter by League
+    league_filter = st.radio(
+        "Filter Squad Analysis by League:",
+        ["All Leagues Combined", "League 858", "League 4159"],
+        horizontal=True,
+    )
+
+    selected_entries = all_entries
+    if league_filter == "League 858":
+        selected_entries = [e for e in all_entries if e["league_id"] == 858]
+    elif league_filter == "League 4159":
+        selected_entries = [e for e in all_entries if e["league_id"] == 4159]
+
+    with st.spinner("Analyzing manager squad selections across leagues..."):
+        df_squad_usage = analyze_squad_usage(selected_entries, player_map, finished_gws)
 
     if not df_squad_usage.empty:
         df_squad_usage.sort_values(
