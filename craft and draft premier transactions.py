@@ -6,7 +6,7 @@ from streamlit_autorefresh import st_autorefresh
 # --- Page Setup ---
 st.set_page_config(page_title="Waiver & Trade Market Tracker", layout="wide")
 
-# Auto-refresh every 30 seconds (prevents memory leaks)
+# Auto-refresh every 30 seconds
 st_autorefresh(interval=30000, key="fpl_refresh_app3_4")
 
 LEAGUE_ID = 858
@@ -33,11 +33,10 @@ trades_data = fetch_json(TRADES_URL)
 
 if league_data and isinstance(league_data, dict):
     entries = league_data.get("league_entries", [])
-    
-    # 1. Map both 'id' and 'entry_id' to the manager's display name
+
     id_to_name = {}
     manager_names = []
-    
+
     for e in entries:
         if isinstance(e, dict):
             name = f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
@@ -54,15 +53,13 @@ if league_data and isinstance(league_data, dict):
 
     if tx_data and isinstance(tx_data, dict):
         transactions = tx_data.get("transactions", [])
-        
-        # Initialize stats using manager name as primary key
+
         manager_stats = {
             m_name: {
                 "waiver_att": 0,
                 "waiver_succ": 0,
                 "fa_succ": 0,
-                "total_transfers": 0,
-                "gws": set()
+                "gws": set(),
             }
             for m_name in manager_names
         }
@@ -70,14 +67,13 @@ if league_data and isinstance(league_data, dict):
         for tx in transactions:
             if not isinstance(tx, dict):
                 continue
-                
-            # Handle both 'entry' and 'league_entry'
+
             raw_id = tx.get("entry") or tx.get("league_entry")
             m_name = id_to_name.get(raw_id)
-            
+
             if m_name and m_name in manager_stats:
-                kind = tx.get("kind")  # 'w' = waiver, 'f' = free agent
-                result = tx.get("result")  # 'a' = accepted, 'di' = decision ignored, etc.
+                kind = tx.get("kind")  # 'w' = waiver, 'f' = free agency
+                result = tx.get("result")  # 'a' = accepted
                 gw = tx.get("event")
 
                 if gw:
@@ -87,33 +83,34 @@ if league_data and isinstance(league_data, dict):
                     manager_stats[m_name]["waiver_att"] += 1
                     if result == "a":
                         manager_stats[m_name]["waiver_succ"] += 1
-                        manager_stats[m_name]["total_transfers"] += 1
                 elif kind == "f":
-                    # Free agent pickups are instant accepted transactions
                     manager_stats[m_name]["fa_succ"] += 1
-                    manager_stats[m_name]["total_transfers"] += 1
 
         tx_list = []
         for m_name, stats in manager_stats.items():
             att = stats["waiver_att"]
             succ = stats["waiver_succ"]
             fa = stats["fa_succ"]
-            total = stats["total_transfers"]
+            total_changes = succ + fa
             rate = round((succ / att) * 100, 1) if att > 0 else 0.0
 
             tx_list.append({
                 "Manager": m_name,
-                "Successful Transfers": total,
+                "Total Successful Changes": total_changes,
                 "Waivers Won": succ,
+                "Free Agent Pickups": fa,
                 "Waivers Attempted": att,
                 "Waiver Success Rate": f"{rate}%",
-                "Free Agent Pickups": fa,
                 "Active GWs": len(stats["gws"]),
             })
 
         df_tx = pd.DataFrame(tx_list)
         if not df_tx.empty:
-            df_tx.sort_values(by=["Successful Transfers", "Waivers Attempted"], ascending=[False, False], inplace=True)
+            df_tx.sort_values(
+                by=["Total Successful Changes", "Waivers Attempted"],
+                ascending=[False, False],
+                inplace=True,
+            )
             st.dataframe(df_tx, use_container_width=True, hide_index=True)
         else:
             st.info("No transaction stats recorded.")
@@ -132,13 +129,13 @@ if league_data and isinstance(league_data, dict):
     if trades_data and isinstance(trades_data, dict):
         trades = trades_data.get("trades", [])
         for t in trades:
-            if isinstance(t, dict) and t.get("state") == "p":  # 'p' = processed
+            if isinstance(t, dict) and t.get("state") == "p":
                 e1 = t.get("offered_entry")
                 e2 = t.get("received_entry")
-                
+
                 name1 = id_to_name.get(e1)
                 name2 = id_to_name.get(e2)
-                
+
                 if name1 in trade_counts:
                     trade_counts[name1] += 1
                 if name2 in trade_counts:
@@ -146,12 +143,14 @@ if league_data and isinstance(league_data, dict):
 
     trades_list = [{
         "Manager": m_name,
-        "Completed Trades Involved": count
+        "Completed Trades Involved": count,
     } for m_name, count in trade_counts.items()]
 
     df_trades = pd.DataFrame(trades_list)
     if not df_trades.empty:
-        df_trades.sort_values(by="Completed Trades Involved", ascending=False, inplace=True)
+        df_trades.sort_values(
+            by="Completed Trades Involved", ascending=False, inplace=True
+        )
         st.dataframe(df_trades, use_container_width=True, hide_index=True)
     else:
         st.info("No completed trade data available.")
