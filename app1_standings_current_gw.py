@@ -3,70 +3,119 @@ import requests
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="Standings & Current GW", layout="wide")
-st_autorefresh(interval=5000, key="fpl_refresh_app1")
+st.set_page_config(page_title="Current Gameweek Fixtures", layout="wide")
+st_autorefresh(interval=30000, key="fpl_refresh_cur_gw")
 
 LEAGUE_ID = 858
 URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
-HEADERS = {"User-Agent": "Mozilla/5.0"}
+BOOTSTRAP_URL = "https://draft.premierleague.com/api/game"
+HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
-@st.cache_data(ttl=3)
-def fetch_league_data():
+
+@st.cache_data(ttl=10)
+def fetch_json(url):
     try:
-        res = requests.get(URL, headers=HEADERS, timeout=8)
+        res = requests.get(url, headers=HEADERS, timeout=8)
         return res.json() if res.status_code == 200 else None
     except Exception:
         return None
 
-data = fetch_league_data()
 
-if data:
+data = fetch_json(URL)
+
+if data and isinstance(data, dict):
+    # 1. Accurately detect Current Gameweek from FPL official metadata
+    league_info = data.get("league", {})
+    current_gw = league_info.get("current_event")
+
+    # Fallback to bootstrap /game endpoint if current_event is null/missing
+    if not current_gw:
+        game_data = fetch_json(BOOTSTRAP_URL)
+        if game_data and isinstance(game_data, dict):
+            current_gw = game_data.get("current_event")
+
+    # Final safety fallback to GW1
+    if not current_gw:
+        current_gw = 1
+
+    st.subheader("📅 Current Gameweek Fixtures & Scores")
+
     entries = data.get("league_entries", [])
     entry_map = {
-        e["id"]: f"{e['entry_name']} ({e['player_first_name']} {e['player_last_name']})"
+        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
         for e in entries
+        if isinstance(e, dict)
     }
 
-    # 1. League Standings
-    st.subheader("🏆 Current League Standings")
-    standings_raw = data.get("standings", [])
-    standings_list = [{
-        "Rank": s.get("rank"),
-        "Manager / Team Name": entry_map.get(s.get("league_entry")),
-        "Played": s.get("matches_played", 0),
-        "Won": s.get("matches_won", 0),
-        "Drawn": s.get("matches_drawn", 0),
-        "Lost": s.get("matches_lost", 0),
-        "Points For": s.get("points_for", 0),
-        "Total Points": s.get("total", 0),
-    } for s in standings_raw]
-    
-    df_standings = pd.DataFrame(standings_list)
-    if not df_standings.empty:
-        df_standings.sort_values(by="Rank", inplace=True)
-        st.dataframe(df_standings, use_container_width=True, hide_index=True)
-
-    st.divider()
-
-    # 2. Current Gameweek Fixtures
-    st.subheader("⚡ Current Gameweek Fixtures & Scores")
     matches_raw = data.get("matches", [])
-    
-    # Identify the highest started/finished event or current GW
-    events = [m.get("event") for m in matches_raw if m.get("event")]
-    current_gw = max(events) if events else 1
 
-    current_fixtures = [{
-        "Home Team": entry_map.get(m.get("league_entry_1")),
-        "Home Score": m.get("league_entry_1_points", 0),
-        "Away Score": m.get("league_entry_2_points", 0),
-        "Away Team": entry_map.get(m.get("league_entry_2")),
-        "Status": "Finished" if m.get("finished") else ("Live" if m.get("started") else "Scheduled")
-    } for m in matches_raw if m.get("event") == current_gw]
+    fixtures_list = []
+    for m in matches_raw:
+        if not isinstance(m, dict):
+            continue
 
-    df_current = pd.DataFrame(current_fixtures)
-    if not df_current.empty:
-        st.caption(f"Showing live updates for **Gameweek {current_gw}**")
-        st.dataframe(df_current, use_container_width=True, hide_index=True)
+        gw = m.get("event")
+        is_started = m.get("started", False)
+        is_finished = m.get("finished", False)
+
+        status = (
+            "Finished" if is_finished else ("Live" if is_started else "Scheduled")
+        )
+        h_score = (
+            m.get("league_entry_1_points", 0)
+            if (is_started or is_finished)
+            else "-"
+        )
+        a_score = (
+            m.get("league_entry_2_points", 0)
+            if (is_started or is_finished)
+            else "-"
+        )
+
+        fixtures_list.append({
+            "GW": gw,
+            "Home Team": entry_map.get(
+                m.get("league_entry_1"), f"Entry {m.get('league_entry_1')}"
+            ),
+            "Home Score": h_score,
+            "Away Score": a_score,
+            "Away Team": entry_map.get(
+                m.get("league_entry_2"), f"Entry {m.get('league_entry_2')}"
+            ),
+            "Status": status,
+        })
+
+    df_fixtures = pd.DataFrame(fixtures_list)
+
+    if not df_fixtures.empty:
+        df_fixtures.sort_values(by=["GW", "Home Team"], inplace=True)
+
+        # 2. Build Gameweek list and set default to current_gw
+        unique_gws = sorted(
+            [int(g) for g in df_fixtures["GW"].dropna().unique()]
+        )
+        gw_options = [f"Gameweek {g}" for g in unique_gws] + ["All Gameweeks"]
+
+        target_label = f"Gameweek {current_gw}"
+        default_idx = (
+            gw_options.index(target_label)
+            if target_label in gw_options
+            else 0
+        )
+
+        selected_option = st.selectbox(
+            "Select Gameweek:", gw_options, index=default_idx
+        )
+
+        if selected_option == "All Gameweeks":
+            df_display = df_fixtures
+        else:
+            selected_gw_num = int(selected_option.replace("Gameweek ", ""))
+            df_display = df_fixtures[df_fixtures["GW"] == selected_gw_num]
+
+        st.caption(f"Showing live updates for **{selected_option}**")
+        st.dataframe(
+            df_display, use_container_width=True, hide_index=True, height=450
+        )
 else:
-    st.error("Failed to load league standings and fixtures.")
+    st.error("Failed to load league data from FPL Draft API.")
