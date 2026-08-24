@@ -13,7 +13,32 @@ LEAGUE_ID = 4159
 LEAGUE_URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
 TX_URL = f"https://draft.premierleague.com/api/draft/league/{LEAGUE_ID}/transactions"
 TRADES_URL = f"https://draft.premierleague.com/api/draft/league/{LEAGUE_ID}/trades"
+BOOTSTRAP_URL = "https://draft.premierleague.com/api/bootstrap-static"
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+
+
+@st.cache_data(ttl=300)
+def fetch_player_metadata():
+    """Fetch player names, positions, and teams from bootstrap-static."""
+    try:
+        res = requests.get(BOOTSTRAP_URL, headers=HEADERS, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            teams = {t["id"]: t["short_name"] for t in data.get("teams", [])}
+            positions = {p["id"]: p["singular_name_short"] for p in data.get("element_types", [])}
+
+            player_map = {}
+            for el in data.get("elements", []):
+                name = el.get("web_name") or f"{el.get('first_name', '')} {el.get('second_name', '')}".strip()
+                player_map[el["id"]] = {
+                    "name": name,
+                    "team": teams.get(el.get("team"), "N/A"),
+                    "position": positions.get(el.get("element_type"), "N/A")
+                }
+            return player_map
+    except Exception:
+        pass
+    return {}
 
 
 @st.cache_data(ttl=15)
@@ -27,6 +52,7 @@ def fetch_json(url):
 
 
 # --- Fetch Data ---
+player_map = fetch_player_metadata()
 league_data = fetch_json(LEAGUE_URL)
 tx_data = fetch_json(TX_URL)
 trades_data = fetch_json(TRADES_URL)
@@ -51,6 +77,9 @@ if league_data and isinstance(league_data, dict):
     # ==========================================
     st.subheader("🔄 Waiver & Free Agency Market Tracker")
 
+    player_counts = {}  # {player_id: {"in": 0, "out": 0}}
+    transfer_log = []
+
     if tx_data and isinstance(tx_data, dict):
         transactions = tx_data.get("transactions", [])
 
@@ -70,12 +99,13 @@ if league_data and isinstance(league_data, dict):
 
             raw_id = tx.get("entry") or tx.get("league_entry")
             m_name = id_to_name.get(raw_id)
+            kind = tx.get("kind")  # 'w' = waiver, 'f' = free agency
+            result = tx.get("result")  # 'a' = accepted
+            gw = tx.get("event")
+            is_successful = (result == "a") or (kind == "f")
 
+            # Update manager-level metrics
             if m_name and m_name in manager_stats:
-                kind = tx.get("kind")  # 'w' = waiver, 'f' = free agency
-                result = tx.get("result")  # 'a' = accepted
-                gw = tx.get("event")
-
                 if gw:
                     manager_stats[m_name]["gws"].add(gw)
 
@@ -85,6 +115,33 @@ if league_data and isinstance(league_data, dict):
                         manager_stats[m_name]["waiver_succ"] += 1
                 elif kind == "f":
                     manager_stats[m_name]["fa_succ"] += 1
+
+            # Update player-level metrics (successful transactions only)
+            if is_successful:
+                el_in = tx.get("element_in")
+                el_out = tx.get("element_out")
+                move_type = "Waiver" if kind == "w" else "Free Agency"
+
+                if el_in:
+                    if el_in not in player_counts:
+                        player_counts[el_in] = {"in": 0, "out": 0}
+                    player_counts[el_in]["in"] += 1
+
+                if el_out:
+                    if el_out not in player_counts:
+                        player_counts[el_out] = {"in": 0, "out": 0}
+                    player_counts[el_out]["out"] += 1
+
+                p_in_info = (player_map or {}).get(el_in, {"name": f"Player {el_in}", "team": "-", "position": "-"})
+                p_out_info = (player_map or {}).get(el_out, {"name": f"Player {el_out}", "team": "-", "position": "-"})
+
+                transfer_log.append({
+                    "Gameweek": f"GW {gw}" if gw else "-",
+                    "Manager": m_name or f"Manager ({raw_id})",
+                    "Type": move_type,
+                    "Player In": f"{p_in_info['name']} ({p_in_info['team']} - {p_in_info['position']})",
+                    "Player Out": f"{p_out_info['name']} ({p_out_info['team']} - {p_out_info['position']})",
+                })
 
         tx_list = []
         for m_name, stats in manager_stats.items():
@@ -154,6 +211,64 @@ if league_data and isinstance(league_data, dict):
         st.dataframe(df_trades, use_container_width=True, hide_index=True)
     else:
         st.info("No completed trade data available.")
+
+    st.divider()
+
+    # ==========================================
+    # SECTION 3: Player Movement Aggregates
+    # ==========================================
+    st.subheader("📊 Most Transferred Players (In & Out)")
+
+    player_summary = []
+    for p_id, counts in player_counts.items():
+        info = (player_map or {}).get(p_id, {"name": f"Player {p_id}", "team": "-", "position": "-"})
+        times_in = counts["in"]
+        times_out = counts["out"]
+        total_activity = times_in + times_out
+        net_movement = times_in - times_out
+
+        player_summary.append({
+            "Player": info["name"],
+            "Club": info["team"],
+            "Pos": info["position"],
+            "Times Brought IN": times_in,
+            "Times Dropped OUT": times_out,
+            "Total Transactions": total_activity,
+            "Net Movement (+/-)": f"+{net_movement}" if net_movement > 0 else str(net_movement),
+        })
+
+    df_players = pd.DataFrame(player_summary)
+
+    if not df_players.empty:
+        df_players.sort_values(
+            by=["Total Transactions", "Times Brought IN"],
+            ascending=[False, False],
+            inplace=True,
+        )
+        st.dataframe(df_players, use_container_width=True, hide_index=True)
+    else:
+        st.info("No successful player transfers recorded yet this season.")
+
+    st.divider()
+
+    # ==========================================
+    # SECTION 4: Detailed Roster Move Log
+    # ==========================================
+    st.subheader("📜 Detailed Roster Move Log")
+
+    df_log = pd.DataFrame(transfer_log)
+    if not df_log.empty:
+        all_managers = ["All Managers"] + sorted(list(df_log["Manager"].unique()))
+        selected_mgr = st.selectbox("Filter moves by Manager:", all_managers)
+
+        if selected_mgr != "All Managers":
+            df_display_log = df_log[df_log["Manager"] == selected_mgr]
+        else:
+            df_display_log = df_log
+
+        st.dataframe(df_display_log, use_container_width=True, hide_index=True, height=450)
+    else:
+        st.info("No transaction history available yet.")
 
 else:
     st.error("Connecting to Premier League servers... Please refresh if data does not load.")
