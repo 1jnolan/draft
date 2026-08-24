@@ -13,7 +13,6 @@ LEAGUE_ID = 858
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 LEAGUE_URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
-# Fixed: Removed '/league/' from the choices URL
 DRAFT_CHOICES_URL = f"https://draft.premierleague.com/api/draft/{LEAGUE_ID}/choices"
 BOOTSTRAP_URL = "https://draft.premierleague.com/api/bootstrap-static"
 
@@ -62,11 +61,16 @@ draft_data = fetch_json(DRAFT_CHOICES_URL)
 
 if league_data and draft_data and player_map:
     entries = league_data.get("league_entries", [])
-    entry_map = {
-        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
-        for e in entries
-        if isinstance(e, dict)
-    }
+    
+    # Map BOTH 'id' and 'entry_id' to resolve ID mismatch
+    entry_map = {}
+    for e in entries:
+        if isinstance(e, dict):
+            name_display = f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+            if "id" in e:
+                entry_map[e["id"]] = name_display
+            if "entry_id" in e:
+                entry_map[e["entry_id"]] = name_display
 
     choices = draft_data.get("choices", [])
 
@@ -77,8 +81,7 @@ if league_data and draft_data and player_map:
                 continue
 
             element_id = choice.get("element")
-            # Handles both entry and league_entry key conventions
-            entry_id = choice.get("entry") or choice.get("league_entry")
+            entry_id = choice.get("entry") or choice.get("entry_id") or choice.get("league_entry")
 
             player_info = player_map.get(
                 element_id,
