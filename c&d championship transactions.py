@@ -9,7 +9,7 @@ st.set_page_config(page_title="Waiver & Trade Market Tracker", layout="wide")
 # Auto-refresh every 30 seconds
 st_autorefresh(interval=30000, key="fpl_refresh_app3_4")
 
-LEAGUE_ID = 858
+LEAGUE_ID = 4159
 LEAGUE_URL = f"https://draft.premierleague.com/api/league/{LEAGUE_ID}/details"
 TX_URL = f"https://draft.premierleague.com/api/draft/league/{LEAGUE_ID}/transactions"
 TRADES_URL = f"https://draft.premierleague.com/api/draft/league/{LEAGUE_ID}/trades"
