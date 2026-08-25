@@ -44,6 +44,18 @@ if data and isinstance(data, dict):
         if isinstance(e, dict)
     }
 
+    # Pre-calculate active/completed matches per entry from the match schedule
+    matches_raw = data.get("matches", [])
+    entry_played_count = {e.get("id"): 0 for e in entries if isinstance(e, dict)}
+    for m in matches_raw:
+        if isinstance(m, dict) and (m.get("started") or m.get("finished")):
+            e1 = m.get("league_entry_1")
+            e2 = m.get("league_entry_2")
+            if e1 in entry_played_count:
+                entry_played_count[e1] += 1
+            if e2 in entry_played_count:
+                entry_played_count[e2] += 1
+
     # ==========================================
     # 1. LEAGUE STANDINGS TABLE
     # ==========================================
@@ -59,13 +71,22 @@ if data and isinstance(data, dict):
         e_id = s.get("league_entry")
         team_display = entry_map.get(e_id, f"Team {e_id}")
 
+        won = s.get("matches_won", 0)
+        drawn = s.get("matches_drawn", 0)
+        lost = s.get("matches_lost", 0)
+
+        # Calculate actual games played (falls back to schedule counter during active gameweeks)
+        actual_played = won + drawn + lost
+        if actual_played == 0 and e_id in entry_played_count:
+            actual_played = entry_played_count[e_id]
+
         standings_rows.append({
             "Rank": s.get("rank", "-"),
             "Team & Manager": team_display,
-            "Played": s.get("matches_played", 0),
-            "Won": s.get("matches_won", 0),
-            "Drawn": s.get("matches_drawn", 0),
-            "Lost": s.get("matches_lost", 0),
+            "Played": actual_played,
+            "Won": won,
+            "Drawn": drawn,
+            "Lost": lost,
             "Points For": s.get("points_for", 0),
             "Points Against": s.get("points_against", 0),
             "Total Pts": s.get("total", 0),
@@ -74,7 +95,6 @@ if data and isinstance(data, dict):
     df_standings = pd.DataFrame(standings_rows)
 
     if not df_standings.empty:
-        # Sort by rank
         df_standings.sort_values(by=["Rank"], inplace=True)
         st.dataframe(
             df_standings, use_container_width=True, hide_index=True
@@ -89,7 +109,6 @@ if data and isinstance(data, dict):
     # ==========================================
     st.subheader("📅 Fixtures & Scores")
 
-    matches_raw = data.get("matches", [])
     fixtures_list = []
 
     for m in matches_raw:
