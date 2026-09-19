@@ -19,8 +19,8 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 
 
 @st.cache_data(ttl=300)
-def fetch_player_metadata():
-    """Fetch player names, positions, and teams from bootstrap-static."""
+def fetch_bootstrap():
+    """Fetch player names, positions, teams, and current gameweek from bootstrap-static."""
     try:
         res = requests.get(BOOTSTRAP_URL, headers=HEADERS, timeout=10)
         if res.status_code == 200:
@@ -36,10 +36,22 @@ def fetch_player_metadata():
                     "team": teams.get(el.get("team"), "N/A"),
                     "position": positions.get(el.get("element_type"), "N/A"),
                 }
-            return player_map
+
+            # Determine current gameweek
+            current_gw = data.get("current_event")
+            if not current_gw:
+                events = data.get("events", {}).get("data", [])
+                for ev in events:
+                    if ev.get("is_current"):
+                        current_gw = ev.get("id")
+                        break
+                    elif ev.get("is_next"):
+                        current_gw = max(1, ev.get("id") - 1)
+
+            return player_map, current_gw
     except Exception:
         pass
-    return {}
+    return {}, None
 
 
 @st.cache_data(ttl=30)
@@ -70,7 +82,7 @@ def fetch_json(url):
 
 
 # --- Fetch Core Data ---
-player_map = fetch_player_metadata()
+player_map, bootstrap_current_gw = fetch_bootstrap()
 league_data = fetch_json(LEAGUE_URL)
 tx_data = fetch_json(TX_URL)
 trades_data = fetch_json(TRADES_URL)
@@ -98,6 +110,7 @@ if league_data and isinstance(league_data, dict):
     # ==========================================
     player_counts = {}
     transfer_log = []
+    current_gw_transfers = []
     gw_scores_cache = {}
 
     manager_stats = {
@@ -112,13 +125,15 @@ if league_data and isinstance(league_data, dict):
         for m_name in manager_names
     }
 
-    # Data structure to track points gained per manager per gameweek
-    # {manager_name: {gw_number: points_in}}
     manager_gw_pts_in = {m_name: {} for m_name in manager_names}
     all_active_gws = set()
 
     if tx_data and isinstance(tx_data, dict):
         transactions = tx_data.get("transactions", [])
+
+        # Infer fallback current GW if not detected from bootstrap
+        all_tx_gws = [t.get("event") for t in transactions if isinstance(t, dict) and t.get("event")]
+        current_gw = bootstrap_current_gw or (max(all_tx_gws) if all_tx_gws else 1)
 
         for tx in transactions:
             if not isinstance(tx, dict):
@@ -146,7 +161,7 @@ if league_data and isinstance(league_data, dict):
                 all_active_gws.add(gw)
                 el_in = tx.get("element_in")
                 el_out = tx.get("element_out")
-                move_type = "Waiver" if kind == "w" else "Free Agency"
+                move_type = "Waiver" if kind == "w" else "Free Transfer"
 
                 # Pull GW live scores for this gameweek
                 if gw not in gw_scores_cache:
@@ -185,17 +200,65 @@ if league_data and isinstance(league_data, dict):
                 p_in_info = (player_map or {}).get(el_in, {"name": f"Player {el_in}", "team": "-", "position": "-"})
                 p_out_info = (player_map or {}).get(el_out, {"name": f"Player {el_out}", "team": "-", "position": "-"})
 
-                transfer_log.append({
+                log_entry = {
                     "Gameweek": f"GW {gw}",
                     "Manager": m_name or f"Manager ({raw_id})",
                     "Type": move_type,
-                    "Player In": f"{p_in_info['name']} ({p_in_info['team']})",
+                    "Player In": f"{p_in_info['name']} ({p_in_info['team']} - {p_in_info['position']})",
                     "Pts In": in_pts,
-                    "Player Out": f"{p_out_info['name']} ({p_out_info['team']})",
+                    "Player Out": f"{p_out_info['name']} ({p_out_info['team']} - {p_out_info['position']})",
                     "Pts Out": out_pts,
                     "Net Pts": f"+{net_pts}" if net_pts > 0 else str(net_pts),
                     "Transfer ROI": tx_pct_str,
-                })
+                }
+                transfer_log.append(log_entry)
+
+                # Capture completed transfers for the current Gameweek
+                if gw == current_gw:
+                    current_gw_transfers.append({
+                        "Manager": m_name or f"Manager ({raw_id})",
+                        "Type": move_type,
+                        "Player In": f"{p_in_info['name']} ({p_in_info['team']} - {p_in_info['position']})",
+                        "Pts In": in_pts,
+                        "Player Out": f"{p_out_info['name']} ({p_out_info['team']} - {p_out_info['position']})",
+                        "Pts Out": out_pts,
+                        "Net Pts": f"+{net_pts}" if net_pts > 0 else str(net_pts),
+                    })
+    else:
+        current_gw = bootstrap_current_gw or 1
+
+    # ==========================================================
+    # TOP SECTION: CURRENT GAMEWEEK COMPLETED TRANSFERS
+    # ==========================================================
+    st.subheader(f"⚡ Current Gameweek: GW {current_gw} Completed Transfers")
+
+    col_m1, col_m2, col_m3 = st.columns(3)
+    df_current_gw = pd.DataFrame(current_gw_transfers)
+
+    waiver_count = len(df_current_gw[df_current_gw["Type"] == "Waiver"]) if not df_current_gw.empty else 0
+    fa_count = len(df_current_gw[df_current_gw["Type"] == "Free Transfer"]) if not df_current_gw.empty else 0
+
+    col_m1.metric("Current Gameweek", f"GW {current_gw}")
+    col_m2.metric("Waiver Transfers", waiver_count)
+    col_m3.metric("Free Transfers", fa_count)
+
+    if not df_current_gw.empty:
+        type_filter = st.radio(
+            "Filter Transfer Type:",
+            ["All", "Waiver", "Free Transfer"],
+            horizontal=True,
+            key="current_gw_type_filter",
+        )
+        if type_filter != "All":
+            df_display_current = df_current_gw[df_current_gw["Type"] == type_filter]
+        else:
+            df_display_current = df_current_gw
+
+        st.dataframe(df_display_current, use_container_width=True, hide_index=True)
+    else:
+        st.info(f"No transfers completed yet for GW {current_gw}.")
+
+    st.divider()
 
     # ==========================================
     # SECTION 1: Manager Waiver Activity & Net Points ROI
@@ -350,11 +413,8 @@ if league_data and isinstance(league_data, dict):
     df_gw_leaderboard = pd.DataFrame(gw_leaderboard_rows)
 
     if not df_gw_leaderboard.empty:
-        # Sort managers by highest cumulative transfer points
         df_gw_leaderboard.sort_values(by="Total Transfer Points", ascending=False, inplace=True)
         df_gw_leaderboard.reset_index(drop=True, inplace=True)
-
-        # Assign clean visual rank strings
         df_gw_leaderboard.insert(0, "Rank", range(1, len(df_gw_leaderboard) + 1))
         st.dataframe(df_gw_leaderboard, use_container_width=True, hide_index=True)
     else:
