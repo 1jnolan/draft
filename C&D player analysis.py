@@ -267,7 +267,6 @@ def get_blooper_standings(prem_data, champ_data):
                 "Total Points": live_points.get(e_id, 0),
             })
 
-    # Fill placeholder spots up to 16 if leagues are not full
     if len(player_stats) < 16:
         for p in range(len(player_stats) + 1, 17):
             player_stats.append({
@@ -280,7 +279,6 @@ def get_blooper_standings(prem_data, champ_data):
     if df.empty:
         return df
 
-    # Sort from LOWEST points to HIGHEST points (Blooper style)
     df.sort_values(by=["Total Points", "Player Name"], ascending=[True, True], inplace=True)
     df.reset_index(drop=True, inplace=True)
 
@@ -304,105 +302,6 @@ def get_blooper_standings(prem_data, champ_data):
         })
 
     return pd.DataFrame(ranked_rows)
-
-
-def parse_fixtures(league_data):
-    """Processes fixtures and scores list from league details."""
-    if not league_data or not isinstance(league_data, dict):
-        return pd.DataFrame(), None
-
-    entries = league_data.get("league_entries", [])
-    entry_map = {
-        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
-        for e in entries
-        if isinstance(e, dict)
-    }
-
-    current_gw = league_data.get("league", {}).get("current_event")
-    matches_raw = league_data.get("matches", [])
-    fixtures_list = []
-
-    for m in matches_raw:
-        if not isinstance(m, dict):
-            continue
-
-        gw = m.get("event")
-        is_started = m.get("started", False)
-        is_finished = m.get("finished", False)
-
-        status = "Finished" if is_finished else ("Live" if is_started else "Scheduled")
-        h_score = m.get("league_entry_1_points", 0) if (is_started or is_finished) else "-"
-        a_score = m.get("league_entry_2_points", 0) if (is_started or is_finished) else "-"
-
-        fixtures_list.append({
-            "GW": gw,
-            "Home Team": entry_map.get(m.get("league_entry_1"), f"Entry {m.get('league_entry_1')}"),
-            "Home Score": h_score,
-            "Away Score": a_score,
-            "Away Team": entry_map.get(m.get("league_entry_2"), f"Entry {m.get('league_entry_2')}"),
-            "Status": status,
-        })
-
-    df_fixtures = pd.DataFrame(fixtures_list)
-    if not df_fixtures.empty:
-        df_fixtures.sort_values(by=["GW", "Home Team"], inplace=True)
-
-    return df_fixtures, current_gw
-
-
-def analyze_squad_usage(entries, player_map, finished_gws):
-    """Parses each manager's lineup across gameweeks to assess starter vs bench usage."""
-    squad_stats = []
-
-    for entry in entries:
-        entry_id = entry["entry_id"]
-        if not entry_id:
-            continue
-
-        started_points = 0
-        benched_points = 0
-        active_lineup_count = 0
-
-        recent_gws = finished_gws[-5:] if len(finished_gws) > 5 else finished_gws
-
-        for gw in recent_gws:
-            gw_data = fetch_json(ENTRY_BASE_URL.format(entry_id, gw))
-            if not gw_data or not isinstance(gw_data, dict):
-                continue
-
-            picks = gw_data.get("picks", [])
-            for p in picks:
-                if not isinstance(p, dict):
-                    continue
-                p_id = p.get("element")
-                pos_order = p.get("position", 1)
-                p_info = player_map.get(p_id, {})
-
-                approx_pts = p_info.get("total_points", 0) / max(len(finished_gws), 1)
-
-                if pos_order <= 11:
-                    started_points += approx_pts
-                    active_lineup_count += 1
-                else:
-                    benched_points += approx_pts
-
-        total_pts = started_points + benched_points
-        bench_efficiency = (
-            round((started_points / total_pts) * 100, 1) if total_pts > 0 else 100.0
-        )
-
-        league_label = "C&D Championship" if entry["league_id"] == 4159 else "C&D Premier"
-
-        squad_stats.append({
-            "League": league_label,
-            "Manager": entry["display_name"],
-            "Team": entry["team_name"],
-            "Starting Squad Contribution (Est Pts)": round(started_points, 1),
-            "Benched Points (Est Pts)": round(benched_points, 1),
-            "Lineup Efficiency (%)": f"{bench_efficiency}%",
-        })
-
-    return pd.DataFrame(squad_stats)
 
 
 def calculate_manager_of_the_year(prem_data, champ_data):
@@ -506,6 +405,105 @@ def calculate_manager_of_the_year(prem_data, champ_data):
     return df
 
 
+def parse_fixtures(league_data):
+    """Processes fixtures and scores list from league details."""
+    if not league_data or not isinstance(league_data, dict):
+        return pd.DataFrame(), None
+
+    entries = league_data.get("league_entries", [])
+    entry_map = {
+        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+        for e in entries
+        if isinstance(e, dict)
+    }
+
+    current_gw = league_data.get("league", {}).get("current_event")
+    matches_raw = league_data.get("matches", [])
+    fixtures_list = []
+
+    for m in matches_raw:
+        if not isinstance(m, dict):
+            continue
+
+        gw = m.get("event")
+        is_started = m.get("started", False)
+        is_finished = m.get("finished", False)
+
+        status = "Finished" if is_finished else ("Live" if is_started else "Scheduled")
+        h_score = m.get("league_entry_1_points", 0) if (is_started or is_finished) else "-"
+        a_score = m.get("league_entry_2_points", 0) if (is_started or is_finished) else "-"
+
+        fixtures_list.append({
+            "GW": gw,
+            "Home Team": entry_map.get(m.get("league_entry_1"), f"Entry {m.get('league_entry_1')}"),
+            "Home Score": h_score,
+            "Away Score": a_score,
+            "Away Team": entry_map.get(m.get("league_entry_2"), f"Entry {m.get('league_entry_2')}"),
+            "Status": status,
+        })
+
+    df_fixtures = pd.DataFrame(fixtures_list)
+    if not df_fixtures.empty:
+        df_fixtures.sort_values(by=["GW", "Home Team"], inplace=True)
+
+    return df_fixtures, current_gw
+
+
+def analyze_squad_usage(entries, player_map, finished_gws):
+    """Parses each manager's lineup across gameweeks to assess starter vs bench usage."""
+    squad_stats = []
+
+    for entry in entries:
+        entry_id = entry["entry_id"]
+        if not entry_id:
+            continue
+
+        started_points = 0
+        benched_points = 0
+        active_lineup_count = 0
+
+        recent_gws = finished_gws[-5:] if len(finished_gws) > 5 else finished_gws
+
+        for gw in recent_gws:
+            gw_data = fetch_json(ENTRY_BASE_URL.format(entry_id, gw))
+            if not gw_data or not isinstance(gw_data, dict):
+                continue
+
+            picks = gw_data.get("picks", [])
+            for p in picks:
+                if not isinstance(p, dict):
+                    continue
+                p_id = p.get("element")
+                pos_order = p.get("position", 1)
+                p_info = player_map.get(p_id, {})
+
+                approx_pts = p_info.get("total_points", 0) / max(len(finished_gws), 1)
+
+                if pos_order <= 11:
+                    started_points += approx_pts
+                    active_lineup_count += 1
+                else:
+                    benched_points += approx_pts
+
+        total_pts = started_points + benched_points
+        bench_efficiency = (
+            round((started_points / total_pts) * 100, 1) if total_pts > 0 else 100.0
+        )
+
+        league_label = "C&D Championship" if entry["league_id"] == 4159 else "C&D Premier"
+
+        squad_stats.append({
+            "League": league_label,
+            "Manager": entry["display_name"],
+            "Team": entry["team_name"],
+            "Starting Squad Contribution (Est Pts)": round(started_points, 1),
+            "Benched Points (Est Pts)": round(benched_points, 1),
+            "Lineup Efficiency (%)": f"{bench_efficiency}%",
+        })
+
+    return pd.DataFrame(squad_stats)
+
+
 # --- Load Core Data ---
 player_map, pos_map, team_map, finished_gws, bootstrap_gw = load_bootstrap_data()
 champ_data = fetch_json(LEAGUE_URL_FMT.format(CHAMPIONSHIP_LEAGUE_ID))
@@ -523,13 +521,18 @@ detected_active_gw = (
 prem_owners, champ_owners = fetch_league_element_ownership(all_entries, detected_active_gw)
 
 # ==========================================================
-# 1. 🏆 CRAFT AND DRAFT LEAGUE STANDINGS
+# 1. 🏆 CRAFT AND DRAFT LEAGUE TABLES
 # ==========================================================
-st.subheader("🏆 Craft and Draft League Standings")
+st.subheader("🏆 Craft and Draft League Tables")
 
 standings_league_choice = st.radio(
-    "Select League Standings:",
-    ["Premier Standings", "Championship Standings", "Blooper League Standings"],
+    "Select League Table:",
+    [
+        "Premier Standings",
+        "Championship Standings",
+        "Blooper League Standings",
+        "Manager of the Year",
+    ],
     horizontal=True,
     key="standings_selector",
 )
@@ -555,6 +558,14 @@ elif standings_league_choice == "Blooper League Standings":
         st.dataframe(df_blooper, use_container_width=True, hide_index=True)
     else:
         st.info("Blooper standings will appear once matches have commenced.")
+
+elif standings_league_choice == "Manager of the Year":
+    st.caption("Awards **1 point** per completed Gameweek to the manager with the single highest match score across both C&D Premier & Championship.")
+    df_moty = calculate_manager_of_the_year(prem_data, champ_data)
+    if not df_moty.empty:
+        st.dataframe(df_moty, use_container_width=True, hide_index=True)
+    else:
+        st.info("Manager of the Year awards will be calculated as Gameweeks finish.")
 
 st.divider()
 
@@ -965,18 +976,3 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
 
 else:
     st.error("Failed to load Market Tracker data from FPL Draft API.")
-
-st.divider()
-
-# ==========================================================
-# 6. 👑 MANAGER OF THE YEAR TABLE
-# ==========================================================
-st.subheader("🏆 Manager of the Year")
-st.caption("Awards **1 point** per completed Gameweek to the manager with the single highest match score across both C&D Premier & Championship.")
-
-df_moty = calculate_manager_of_the_year(prem_data, champ_data)
-
-if not df_moty.empty:
-    st.dataframe(df_moty, use_container_width=True, hide_index=True)
-else:
-    st.info("Manager of the Year awards will be calculated as Gameweeks finish.")
