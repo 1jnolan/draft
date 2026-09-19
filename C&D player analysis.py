@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
+import json
+import re
 
 # --- Page Setup ---
 st.set_page_config(page_title="Craft & Draft Squad & Player Analytics", layout="wide")
@@ -13,12 +15,13 @@ CHAMPIONSHIP_LEAGUE_ID = 4159
 PREMIER_LEAGUE_ID = 858
 LEAGUE_IDS = [PREMIER_LEAGUE_ID, CHAMPIONSHIP_LEAGUE_ID]
 
-FOTMOB_PREDICT_LEAGUE_ID = "281509"
-FOTMOB_PAGE_ID = "472627"
-FOTMOB_API_URL = f"https://predict.fotmob.com/api/leaderboard?leagueId={FOTMOB_PREDICT_LEAGUE_ID}&leagueWeek=total"
-FOTMOB_PAGE_URL = f"https://predict.fotmob.com/{FOTMOB_PAGE_ID}?leagueId={FOTMOB_PREDICT_LEAGUE_ID}&leagueWeek=total"
+FOTMOB_PAGE_URL = "https://predict.fotmob.com/472627?leagueId=281509&leagueWeek=total"
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 
 BOOTSTRAP_URL = "https://draft.premierleague.com/api/bootstrap-static"
 LEAGUE_URL_FMT = "https://draft.premierleague.com/api/league/{}/details"
@@ -56,67 +59,61 @@ def fetch_gw_live_scores(gw):
     return {}
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=120)
 def fetch_fotmob_predictions_standings():
-    """Fetches and parses the FotMob Predictor leaderboard table."""
+    """Fetches and parses the FotMob Predictor leaderboard table from the page payload."""
     try:
-        # Try fetching from internal API
-        res = requests.get(FOTMOB_API_URL, headers=HEADERS, timeout=10)
-        data = res.json() if res.status_code == 200 else None
+        res = requests.get(FOTMOB_PAGE_URL, headers=HEADERS, timeout=12)
+        if res.status_code != 200:
+            st.warning(f"FotMob returned HTTP status code: {res.status_code}")
+            return pd.DataFrame()
 
-        # Fallback to fetching page HTML and extracting Next.js JSON data
-        if not data:
-            page_res = requests.get(FOTMOB_PAGE_URL, headers=HEADERS, timeout=10)
-            if page_res.status_code == 200 and "__NEXT_DATA__" in page_res.text:
-                import json
-                start_idx = page_res.text.find('<script id="__NEXT_DATA__" type="application/json">')
-                if start_idx != -1:
-                    json_start = page_res.text.find('>', start_idx) + 1
-                    json_end = page_res.text.find('</script>', json_start)
-                    next_data = json.loads(page_res.text[json_start:json_end])
-                    data = next_data.get("props", {}).get("pageProps", {})
+        html_text = res.text
+        json_data = None
 
-        if data and isinstance(data, dict):
+        # 1. Attempt Next.js __NEXT_DATA__ payload extraction
+        if '<script id="__NEXT_DATA__"' in html_text:
+            match = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', html_text, re.DOTALL)
+            if match:
+                try:
+                    json_data = json.loads(match.group(1))
+                except Exception:
+                    pass
+
+        # 2. Extract potential table rows from JSON payload
+        rows = []
+        if json_data:
+            page_props = json_data.get("props", {}).get("pageProps", {})
             leaderboard = (
-                data.get("leaderboard")
-                or data.get("rows")
-                or data.get("entries")
-                or data.get("users")
+                page_props.get("leaderboard")
+                or page_props.get("rows")
+                or page_props.get("entries")
+                or page_props.get("standings")
                 or []
             )
 
-            rows = []
-            for item in leaderboard:
-                if not isinstance(item, dict):
-                    continue
+            if isinstance(leaderboard, list):
+                for item in leaderboard:
+                    if not isinstance(item, dict):
+                        continue
+                    rows.append({
+                        "Rank": item.get("rank") or item.get("position", "-"),
+                        "Participant": item.get("userName") or item.get("name") or item.get("user", {}).get("name", "Unknown"),
+                        "Total Points": item.get("totalPoints") if item.get("totalPoints") is not None else item.get("points", 0),
+                        "Exact Scores": item.get("exactScores") if item.get("exactScores") is not None else item.get("exactMatches", "-"),
+                        "Correct Outcomes": item.get("correctOutcomes") if item.get("correctOutcomes") is not None else item.get("correctResults", "-"),
+                    })
 
-                user_name = (
-                    item.get("userName")
-                    or item.get("name")
-                    or item.get("user", {}).get("name")
-                    or item.get("displayName", "Unknown")
-                )
-                points = item.get("totalPoints") if item.get("totalPoints") is not None else item.get("points", 0)
-                rank = item.get("rank") or item.get("position", "-")
-                exact = item.get("exactScores") if item.get("exactScores") is not None else item.get("exactMatches", "-")
-                outcomes = item.get("correctOutcomes") if item.get("correctOutcomes") is not None else item.get("correctResults", "-")
+        df = pd.DataFrame(rows)
+        if not df.empty and "Rank" in df.columns:
+            if pd.to_numeric(df["Rank"], errors="coerce").notnull().all():
+                df["Rank"] = pd.to_numeric(df["Rank"])
+                df.sort_values(by="Rank", inplace=True)
+            return df
 
-                rows.append({
-                    "Rank": rank,
-                    "Participant": user_name,
-                    "Total Points": points,
-                    "Exact Scores": exact,
-                    "Correct Outcomes": outcomes,
-                })
+    except Exception as e:
+        st.error(f"FotMob fetch error: {e}")
 
-            df = pd.DataFrame(rows)
-            if not df.empty:
-                if "Rank" in df.columns and pd.to_numeric(df["Rank"], errors="coerce").notnull().all():
-                    df["Rank"] = pd.to_numeric(df["Rank"])
-                    df.sort_values(by="Rank", inplace=True)
-                return df
-    except Exception:
-        pass
     return pd.DataFrame()
 
 
@@ -136,17 +133,14 @@ def load_bootstrap_data():
     if data and isinstance(data, dict):
         current_gw = data.get("current_event")
 
-        # 1. Map Positions
         for p in data.get("element_types", []):
             if isinstance(p, dict):
                 positions_map[p.get("id")] = p.get("singular_name_short", "N/A")
 
-        # 2. Map Teams
         for t in data.get("teams", []):
             if isinstance(t, dict):
                 teams_map[t.get("id")] = t.get("short_name", t.get("name", "N/A"))
 
-        # 3. Map Players
         for el in data.get("elements", []):
             if isinstance(el, dict):
                 elements_map[el.get("id")] = {
@@ -161,7 +155,6 @@ def load_bootstrap_data():
                     "minutes": el.get("minutes", 0),
                 }
 
-        # 4. Safe Gameweek Extraction
         events_obj = data.get("events")
         events_raw = []
         if isinstance(events_obj, dict):
