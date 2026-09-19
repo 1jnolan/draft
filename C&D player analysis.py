@@ -13,6 +13,11 @@ CHAMPIONSHIP_LEAGUE_ID = 4159
 PREMIER_LEAGUE_ID = 858
 LEAGUE_IDS = [PREMIER_LEAGUE_ID, CHAMPIONSHIP_LEAGUE_ID]
 
+FOTMOB_PREDICT_LEAGUE_ID = "281509"
+FOTMOB_PAGE_ID = "472627"
+FOTMOB_API_URL = f"https://predict.fotmob.com/api/leaderboard?leagueId={FOTMOB_PREDICT_LEAGUE_ID}&leagueWeek=total"
+FOTMOB_PAGE_URL = f"https://predict.fotmob.com/{FOTMOB_PAGE_ID}?leagueId={FOTMOB_PREDICT_LEAGUE_ID}&leagueWeek=total"
+
 HEADERS = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
 
 BOOTSTRAP_URL = "https://draft.premierleague.com/api/bootstrap-static"
@@ -49,6 +54,70 @@ def fetch_gw_live_scores(gw):
     except Exception:
         pass
     return {}
+
+
+@st.cache_data(ttl=60)
+def fetch_fotmob_predictions_standings():
+    """Fetches and parses the FotMob Predictor leaderboard table."""
+    try:
+        # Try fetching from internal API
+        res = requests.get(FOTMOB_API_URL, headers=HEADERS, timeout=10)
+        data = res.json() if res.status_code == 200 else None
+
+        # Fallback to fetching page HTML and extracting Next.js JSON data
+        if not data:
+            page_res = requests.get(FOTMOB_PAGE_URL, headers=HEADERS, timeout=10)
+            if page_res.status_code == 200 and "__NEXT_DATA__" in page_res.text:
+                import json
+                start_idx = page_res.text.find('<script id="__NEXT_DATA__" type="application/json">')
+                if start_idx != -1:
+                    json_start = page_res.text.find('>', start_idx) + 1
+                    json_end = page_res.text.find('</script>', json_start)
+                    next_data = json.loads(page_res.text[json_start:json_end])
+                    data = next_data.get("props", {}).get("pageProps", {})
+
+        if data and isinstance(data, dict):
+            leaderboard = (
+                data.get("leaderboard")
+                or data.get("rows")
+                or data.get("entries")
+                or data.get("users")
+                or []
+            )
+
+            rows = []
+            for item in leaderboard:
+                if not isinstance(item, dict):
+                    continue
+
+                user_name = (
+                    item.get("userName")
+                    or item.get("name")
+                    or item.get("user", {}).get("name")
+                    or item.get("displayName", "Unknown")
+                )
+                points = item.get("totalPoints") if item.get("totalPoints") is not None else item.get("points", 0)
+                rank = item.get("rank") or item.get("position", "-")
+                exact = item.get("exactScores") if item.get("exactScores") is not None else item.get("exactMatches", "-")
+                outcomes = item.get("correctOutcomes") if item.get("correctOutcomes") is not None else item.get("correctResults", "-")
+
+                rows.append({
+                    "Rank": rank,
+                    "Participant": user_name,
+                    "Total Points": points,
+                    "Exact Scores": exact,
+                    "Correct Outcomes": outcomes,
+                })
+
+            df = pd.DataFrame(rows)
+            if not df.empty:
+                if "Rank" in df.columns and pd.to_numeric(df["Rank"], errors="coerce").notnull().all():
+                    df["Rank"] = pd.to_numeric(df["Rank"])
+                    df.sort_values(by="Rank", inplace=True)
+                return df
+    except Exception:
+        pass
+    return pd.DataFrame()
 
 
 @st.cache_data(ttl=300)
@@ -267,7 +336,6 @@ def get_blooper_standings(prem_data, champ_data):
                 "Total Points": live_points.get(e_id, 0),
             })
 
-    # Fill placeholder spots up to 16 if leagues are not full
     if len(player_stats) < 16:
         for p in range(len(player_stats) + 1, 17):
             player_stats.append({
@@ -280,7 +348,6 @@ def get_blooper_standings(prem_data, champ_data):
     if df.empty:
         return df
 
-    # Sort from LOWEST points to HIGHEST points (Blooper style)
     df.sort_values(by=["Total Points", "Player Name"], ascending=[True, True], inplace=True)
     df.reset_index(drop=True, inplace=True)
 
@@ -529,7 +596,12 @@ st.subheader("🏆 Craft and Draft League Standings")
 
 standings_league_choice = st.radio(
     "Select League Standings:",
-    ["Premier Standings", "Championship Standings", "Blooper League Standings"],
+    [
+        "Premier Standings",
+        "Championship Standings",
+        "Blooper League Standings",
+        "Premier League Predictions standings",
+    ],
     horizontal=True,
     key="standings_selector",
 )
@@ -555,6 +627,14 @@ elif standings_league_choice == "Blooper League Standings":
         st.dataframe(df_blooper, use_container_width=True, hide_index=True)
     else:
         st.info("Blooper standings will appear once matches have commenced.")
+
+elif standings_league_choice == "Premier League Predictions standings":
+    st.caption("Live standings synced from the FotMob Premier League Predictor competition.")
+    df_predictions = fetch_fotmob_predictions_standings()
+    if not df_predictions.empty:
+        st.dataframe(df_predictions, use_container_width=True, hide_index=True)
+    else:
+        st.info("Predictor league data is currently being fetched or will appear once predictions commence.")
 
 st.divider()
 
