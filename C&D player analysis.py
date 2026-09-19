@@ -114,6 +114,109 @@ def get_all_league_entries():
     return all_entries
 
 
+def parse_standings(league_data):
+    """Processes standings dataframe from league details."""
+    if not league_data or not isinstance(league_data, dict):
+        return pd.DataFrame()
+
+    entries = league_data.get("league_entries", [])
+    entry_map = {
+        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+        for e in entries
+        if isinstance(e, dict)
+    }
+
+    matches_raw = league_data.get("matches", [])
+    entry_played_count = {e.get("id"): 0 for e in entries if isinstance(e, dict)}
+    for m in matches_raw:
+        if isinstance(m, dict) and (m.get("started") or m.get("finished")):
+            e1 = m.get("league_entry_1")
+            e2 = m.get("league_entry_2")
+            if e1 in entry_played_count:
+                entry_played_count[e1] += 1
+            if e2 in entry_played_count:
+                entry_played_count[e2] += 1
+
+    standings_raw = league_data.get("standings", [])
+    standings_rows = []
+
+    for s in standings_raw:
+        if not isinstance(s, dict):
+            continue
+
+        e_id = s.get("league_entry")
+        team_display = entry_map.get(e_id, f"Team {e_id}")
+
+        won = s.get("matches_won", 0)
+        drawn = s.get("matches_drawn", 0)
+        lost = s.get("matches_lost", 0)
+
+        actual_played = won + drawn + lost
+        if actual_played == 0 and e_id in entry_played_count:
+            actual_played = entry_played_count[e_id]
+
+        standings_rows.append({
+            "Rank": s.get("rank", "-"),
+            "Team & Manager": team_display,
+            "Played": actual_played,
+            "Won": won,
+            "Drawn": drawn,
+            "Lost": lost,
+            "Points For": s.get("points_for", 0),
+            "Points Against": s.get("points_against", 0),
+            "Total Pts": s.get("total", 0),
+        })
+
+    df_standings = pd.DataFrame(standings_rows)
+    if not df_standings.empty:
+        df_standings.sort_values(by=["Rank"], inplace=True)
+    return df_standings
+
+
+def parse_fixtures(league_data):
+    """Processes fixtures and scores list from league details."""
+    if not league_data or not isinstance(league_data, dict):
+        return pd.DataFrame(), None
+
+    entries = league_data.get("league_entries", [])
+    entry_map = {
+        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+        for e in entries
+        if isinstance(e, dict)
+    }
+
+    current_gw = league_data.get("league", {}).get("current_event")
+    matches_raw = league_data.get("matches", [])
+    fixtures_list = []
+
+    for m in matches_raw:
+        if not isinstance(m, dict):
+            continue
+
+        gw = m.get("event")
+        is_started = m.get("started", False)
+        is_finished = m.get("finished", False)
+
+        status = "Finished" if is_finished else ("Live" if is_started else "Scheduled")
+        h_score = m.get("league_entry_1_points", 0) if (is_started or is_finished) else "-"
+        a_score = m.get("league_entry_2_points", 0) if (is_started or is_finished) else "-"
+
+        fixtures_list.append({
+            "GW": gw,
+            "Home Team": entry_map.get(m.get("league_entry_1"), f"Entry {m.get('league_entry_1')}"),
+            "Home Score": h_score,
+            "Away Score": a_score,
+            "Away Team": entry_map.get(m.get("league_entry_2"), f"Entry {m.get('league_entry_2')}"),
+            "Status": status,
+        })
+
+    df_fixtures = pd.DataFrame(fixtures_list)
+    if not df_fixtures.empty:
+        df_fixtures.sort_values(by=["GW", "Home Team"], inplace=True)
+
+    return df_fixtures, current_gw
+
+
 def analyze_squad_usage(entries, player_map, finished_gws):
     """Parses each manager's lineup across gameweeks to assess starter vs bench usage."""
     squad_stats = []
@@ -172,126 +275,71 @@ def analyze_squad_usage(entries, player_map, finished_gws):
 # --- Load Core Data ---
 player_map, pos_map, team_map, finished_gws, bootstrap_gw = load_bootstrap_data()
 champ_data = fetch_json(LEAGUE_URL_FMT.format(CHAMPIONSHIP_LEAGUE_ID))
+prem_data = fetch_json(LEAGUE_URL_FMT.format(PREMIER_LEAGUE_ID))
 all_entries = get_all_league_entries()
 
 # ==========================================================
-# 1. 🏆 CHAMPIONSHIP STANDINGS TABLE
+# 1. 🏆 CRAFT AND DRAFT LEAGUE STANDINGS
 # ==========================================================
-st.subheader("🏆 Championship Standings")
+st.subheader("🏆 Craft and Draft League Standings")
 
-if champ_data and isinstance(champ_data, dict):
-    champ_entries = champ_data.get("league_entries", [])
-    champ_entry_map = {
-        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
-        for e in champ_entries
-        if isinstance(e, dict)
-    }
+standings_league_choice = st.radio(
+    "Select League Standings:",
+    ["Premier Standings", "Championship Standings"],
+    horizontal=True,
+    key="standings_selector",
+)
 
-    matches_raw = champ_data.get("matches", [])
-    entry_played_count = {e.get("id"): 0 for e in champ_entries if isinstance(e, dict)}
-    for m in matches_raw:
-        if isinstance(m, dict) and (m.get("started") or m.get("finished")):
-            e1 = m.get("league_entry_1")
-            e2 = m.get("league_entry_2")
-            if e1 in entry_played_count:
-                entry_played_count[e1] += 1
-            if e2 in entry_played_count:
-                entry_played_count[e2] += 1
+selected_standings_data = prem_data if standings_league_choice == "Premier Standings" else champ_data
+df_standings = parse_standings(selected_standings_data)
 
-    standings_raw = champ_data.get("standings", [])
-    standings_rows = []
-
-    for s in standings_raw:
-        if not isinstance(s, dict):
-            continue
-
-        e_id = s.get("league_entry")
-        team_display = champ_entry_map.get(e_id, f"Team {e_id}")
-
-        won = s.get("matches_won", 0)
-        drawn = s.get("matches_drawn", 0)
-        lost = s.get("matches_lost", 0)
-
-        actual_played = won + drawn + lost
-        if actual_played == 0 and e_id in entry_played_count:
-            actual_played = entry_played_count[e_id]
-
-        standings_rows.append({
-            "Rank": s.get("rank", "-"),
-            "Team & Manager": team_display,
-            "Played": actual_played,
-            "Won": won,
-            "Drawn": drawn,
-            "Lost": lost,
-            "Points For": s.get("points_for", 0),
-            "Points Against": s.get("points_against", 0),
-            "Total Pts": s.get("total", 0),
-        })
-
-    df_standings = pd.DataFrame(standings_rows)
-
-    if not df_standings.empty:
-        df_standings.sort_values(by=["Rank"], inplace=True)
-        st.dataframe(df_standings, use_container_width=True, hide_index=True)
-    else:
-        st.info("Standings will appear once matches have commenced.")
-
-    st.divider()
-
-    # ==========================================================
-    # 2. 📅 CHAMPIONSHIP FIXTURES & SCORES TABLE
-    # ==========================================================
-    st.subheader("📅 Championship Fixtures & Scores")
-
-    current_gw = champ_data.get("league", {}).get("current_event") or bootstrap_gw or 1
-
-    fixtures_list = []
-    for m in matches_raw:
-        if not isinstance(m, dict):
-            continue
-
-        gw = m.get("event")
-        is_started = m.get("started", False)
-        is_finished = m.get("finished", False)
-
-        status = "Finished" if is_finished else ("Live" if is_started else "Scheduled")
-        h_score = m.get("league_entry_1_points", 0) if (is_started or is_finished) else "-"
-        a_score = m.get("league_entry_2_points", 0) if (is_started or is_finished) else "-"
-
-        fixtures_list.append({
-            "GW": gw,
-            "Home Team": champ_entry_map.get(m.get("league_entry_1"), f"Entry {m.get('league_entry_1')}"),
-            "Home Score": h_score,
-            "Away Score": a_score,
-            "Away Team": champ_entry_map.get(m.get("league_entry_2"), f"Entry {m.get('league_entry_2')}"),
-            "Status": status,
-        })
-
-    df_fixtures = pd.DataFrame(fixtures_list)
-
-    if not df_fixtures.empty:
-        df_fixtures.sort_values(by=["GW", "Home Team"], inplace=True)
-
-        unique_gws = sorted([int(g) for g in df_fixtures["GW"].dropna().unique()])
-        gw_options = [f"Gameweek {g}" for g in unique_gws] + ["All Gameweeks"]
-
-        target_label = f"Gameweek {current_gw}"
-        default_idx = gw_options.index(target_label) if target_label in gw_options else 0
-
-        selected_option = st.selectbox("Select Gameweek:", gw_options, index=default_idx)
-
-        if selected_option == "All Gameweeks":
-            df_display = df_fixtures
-        else:
-            selected_gw_num = int(selected_option.replace("Gameweek ", ""))
-            df_display = df_fixtures[df_fixtures["GW"] == selected_gw_num]
-
-        st.caption(f"Showing live fixtures for **{selected_option}**")
-        st.dataframe(df_display, use_container_width=True, hide_index=True, height=350)
-    else:
-        st.info("No fixtures found.")
+if not df_standings.empty:
+    st.dataframe(df_standings, use_container_width=True, hide_index=True)
 else:
-    st.error("Failed to load Championship data from FPL Draft API.")
+    st.info("Standings will appear once matches have commenced.")
+
+st.divider()
+
+# ==========================================================
+# 2. 📅 CRAFT AND DRAFT FIXTURES & SCORES
+# ==========================================================
+fixtures_league_choice = st.radio(
+    "Select League Fixtures:",
+    ["Premier Fixtures", "Championship Fixtures"],
+    horizontal=True,
+    key="fixtures_selector",
+)
+
+st.subheader(f"📅 {fixtures_league_choice} & Scores")
+
+selected_fixtures_data = prem_data if fixtures_league_choice == "Premier Fixtures" else champ_data
+df_fixtures, detected_gw = parse_fixtures(selected_fixtures_data)
+active_gw = detected_gw or bootstrap_gw or 1
+
+if not df_fixtures.empty:
+    unique_gws = sorted([int(g) for g in df_fixtures["GW"].dropna().unique()])
+    gw_options = [f"Gameweek {g}" for g in unique_gws] + ["All Gameweeks"]
+
+    target_label = f"Gameweek {active_gw}"
+    default_idx = gw_options.index(target_label) if target_label in gw_options else 0
+
+    selected_option = st.selectbox(
+        "Select Gameweek:",
+        gw_options,
+        index=default_idx,
+        key=f"gw_select_{fixtures_league_choice}",
+    )
+
+    if selected_option == "All Gameweeks":
+        df_display = df_fixtures
+    else:
+        selected_gw_num = int(selected_option.replace("Gameweek ", ""))
+        df_display = df_fixtures[df_fixtures["GW"] == selected_gw_num]
+
+    st.caption(f"Showing live fixtures for **{selected_option}**")
+    st.dataframe(df_display, use_container_width=True, hide_index=True, height=350)
+else:
+    st.info("No fixtures found.")
 
 st.divider()
 
@@ -301,7 +349,6 @@ st.divider()
 st.subheader("🧠 Manager Lineup Selection & Squad Usage")
 st.caption("Analyzes starting lineup optimization vs points left on the bench.")
 
-# Filter by League with requested custom labels
 league_filter = st.radio(
     "Filter Squad Analysis by League:",
     ["All Leagues Combined", "C&D Premier", "C&D Championship"],
