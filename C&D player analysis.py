@@ -114,6 +114,45 @@ def get_all_league_entries():
     return all_entries
 
 
+@st.cache_data(ttl=180)
+def fetch_league_element_ownership(entries, current_gw):
+    """
+    Scrapes the most recent roster picks for each manager in both leagues
+    to establish who owns which player.
+    Returns:
+        prem_owners: dict {player_id: "Manager Name"}
+        champ_owners: dict {player_id: "Manager Name"}
+    """
+    prem_owners = {}
+    champ_owners = {}
+
+    target_gw = max(1, current_gw or 1)
+
+    for entry in entries:
+        entry_id = entry.get("entry_id")
+        if not entry_id:
+            continue
+
+        l_id = entry.get("league_id")
+        mgr_name = entry.get("manager_name") or entry.get("team_name")
+
+        # Try current gameweek; fall back to prior gameweek if not yet generated
+        roster_data = fetch_json(ENTRY_BASE_URL.format(entry_id, target_gw))
+        if (not roster_data or "picks" not in roster_data) and target_gw > 1:
+            roster_data = fetch_json(ENTRY_BASE_URL.format(entry_id, target_gw - 1))
+
+        if roster_data and isinstance(roster_data, dict):
+            for pick in roster_data.get("picks", []):
+                p_id = pick.get("element")
+                if p_id:
+                    if l_id == PREMIER_LEAGUE_ID:
+                        prem_owners[p_id] = mgr_name
+                    elif l_id == CHAMPIONSHIP_LEAGUE_ID:
+                        champ_owners[p_id] = mgr_name
+
+    return prem_owners, champ_owners
+
+
 def parse_standings(league_data):
     """Processes standings dataframe from league details."""
     if not league_data or not isinstance(league_data, dict):
@@ -278,6 +317,17 @@ champ_data = fetch_json(LEAGUE_URL_FMT.format(CHAMPIONSHIP_LEAGUE_ID))
 prem_data = fetch_json(LEAGUE_URL_FMT.format(PREMIER_LEAGUE_ID))
 all_entries = get_all_league_entries()
 
+# Determine active gameweek
+detected_active_gw = (
+    (prem_data and prem_data.get("league", {}).get("current_event"))
+    or (champ_data and champ_data.get("league", {}).get("current_event"))
+    or bootstrap_gw
+    or 1
+)
+
+# Fetch ownership across both leagues
+prem_owners, champ_owners = fetch_league_element_ownership(all_entries, detected_active_gw)
+
 # ==========================================================
 # 1. 🏆 CRAFT AND DRAFT LEAGUE STANDINGS
 # ==========================================================
@@ -388,6 +438,8 @@ if player_map:
             "Club": p_info["team"],
             "Position": p_info["position"],
             "Total Points": p_info["total_points"],
+            "C&D Premier Owner": prem_owners.get(p_id, "Free Agent"),
+            "C&D Championship Owner": champ_owners.get(p_id, "Free Agent"),
             "Goals": p_info["goals"],
             "Assists": p_info["assists"],
             "Clean Sheets": p_info["clean_sheets"],
