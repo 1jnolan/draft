@@ -394,38 +394,7 @@ else:
 st.divider()
 
 # ==========================================================
-# 3. MANAGER LINEUP SELECTION & SQUAD USAGE
-# ==========================================================
-st.subheader("🧠 Manager Lineup Selection & Squad Usage")
-st.caption("Analyzes starting lineup optimization vs points left on the bench.")
-
-league_filter = st.radio(
-    "Filter Squad Analysis by League:",
-    ["All Leagues Combined", "C&D Premier", "C&D Championship"],
-    horizontal=True,
-)
-
-selected_entries = all_entries
-if league_filter == "C&D Premier":
-    selected_entries = [e for e in all_entries if e["league_id"] == PREMIER_LEAGUE_ID]
-elif league_filter == "C&D Championship":
-    selected_entries = [e for e in all_entries if e["league_id"] == CHAMPIONSHIP_LEAGUE_ID]
-
-with st.spinner("Analyzing manager squad selections across leagues..."):
-    df_squad_usage = analyze_squad_usage(selected_entries, player_map, finished_gws)
-
-if not df_squad_usage.empty:
-    df_squad_usage.sort_values(
-        by="Starting Squad Contribution (Est Pts)", ascending=False, inplace=True
-    )
-    st.dataframe(df_squad_usage, use_container_width=True, hide_index=True)
-else:
-    st.info("Squad analysis will populate as fixtures progress.")
-
-st.divider()
-
-# ==========================================================
-# 4. PREMIER LEAGUE PLAYER POOL PERFORMANCE
+# 3. ⚽ PREMIER LEAGUE PLAYER POOL PERFORMANCE
 # ==========================================================
 st.subheader("⚽ Premier League Player Pool Performance")
 
@@ -476,3 +445,34 @@ if player_map:
     )
 else:
     st.info("Player data could not be loaded.")
+
+st.divider()
+
+# ==========================================================
+# 4. 🧠 MANAGER LINEUP SELECTION & SQUAD USAGE
+# ==========================================================
+st.subheader("🧠 Manager Lineup Selection & Squad Usage")
+st.caption("Analyzes starting lineup optimization vs points left on the bench.")
+
+league_filter = st.radio(
+    "Filter Squad Analysis by League:",
+    ["All Leagues Combined", "C&D Premier", "C&D Championship"],
+    horizontal=True,
+)
+
+selected_entries = all_entries
+if league_filter == "C&D Premier":
+    selected_entries = [e for e in all_entries if e["league_id"] == PREMIER_LEAGUE_ID]
+elif league_filter == "C&D Championship":
+    selected_entries = [e for e in all_entries if e["league_id"] == CHAMPIONSHIP_LEAGUE_ID]
+
+with st.spinner("Analyzing manager squad selections across leagues..."):
+    df_squad_usage = analyze_squad_usage(selected_entries, player_map, finished_gws)
+
+if not df_squad_usage.empty:
+    df_squad_usage.sort_values(
+        by="Starting Squad Contribution (Est Pts)", ascending=False, inplace=True
+    )
+    st.dataframe(df_squad_usage, use_container_width=True, hide_index=True)
+else:
+    st.info("Squad analysis will populate as fixtures progress.")
