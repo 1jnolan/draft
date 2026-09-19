@@ -592,22 +592,7 @@ else:
 st.divider()
 
 # ==========================================================
-# 5. 👑 MANAGER OF THE YEAR TABLE
-# ==========================================================
-st.subheader("🏆 Manager of the Year")
-st.caption("Awards **1 point** per completed Gameweek to the manager with the single highest match score across both C&D Premier & Championship.")
-
-df_moty = calculate_manager_of_the_year(prem_data, champ_data)
-
-if not df_moty.empty:
-    st.dataframe(df_moty, use_container_width=True, hide_index=True)
-else:
-    st.info("Manager of the Year awards will be calculated as Gameweeks finish.")
-
-st.divider()
-
-# ==========================================================
-# 6. 🔄 WAIVER & TRADE MARKET TRACKER
+# 5. 🔄 WAIVER & TRADE MARKET TRACKER
 # ==========================================================
 st.subheader("🔄 Waiver & Trade Market Tracker")
 
@@ -734,7 +719,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
                     "Transfer ROI": tx_pct_str,
                 })
 
-    # Sub-section 6.1: Manager Waiver Activity & ROI Table
+    # Sub-section 5.1: Manager Waiver Activity & ROI Table
     st.markdown("#### 📈 Manager Waiver Activity & Net Points Impact")
     tx_list = []
     for m_name, stats in m_manager_stats.items():
@@ -777,7 +762,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
     else:
         st.info("No transaction stats recorded.")
 
-    # Sub-section 6.2: Manager-to-Manager Trades Tracker
+    # Sub-section 5.2: Manager-to-Manager Trades Tracker
     st.markdown("#### 🤝 Manager-to-Manager Trades Tracker")
     trade_counts = {m_name: 0 for m_name in m_manager_names}
     if trades_data and isinstance(trades_data, dict):
@@ -801,7 +786,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
     else:
         st.info("No completed trade data available.")
 
-    # Sub-section 6.3: Most Transferred Players
+    # Sub-section 5.3: Most Transferred Players
     st.markdown("#### 📊 Most Transferred Players (In & Out)")
     player_summary = []
     for p_id, counts in m_player_counts.items():
@@ -828,7 +813,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
     else:
         st.info("No player transfers recorded yet this season.")
 
-    # Sub-section 6.4: Detailed Transaction Log
+    # Sub-section 5.4: Detailed Transaction Log
     st.markdown("#### 📜 Detailed Roster Move & Gameweek Points Impact Log")
     df_log = pd.DataFrame(m_transfer_log)
     if not df_log.empty:
@@ -844,7 +829,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
     else:
         st.info("No transaction history available yet.")
 
-    # Sub-section 6.5: Manager Gameweek Transfer Points Leaderboard
+    # Sub-section 5.5: Manager Gameweek Transfer Points Leaderboard
     st.markdown("#### 🏆 Manager Gameweek Transfer Points Leaderboard")
     st.caption("Ranks managers by points scored by incoming transfer players for a selected Gameweek and across the entire season.")
 
@@ -884,3 +869,18 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
 
 else:
     st.error("Failed to load Market Tracker data from FPL Draft API.")
+
+st.divider()
+
+# ==========================================================
+# 6. 👑 MANAGER OF THE YEAR TABLE
+# ==========================================================
+st.subheader("🏆 Manager of the Year")
+st.caption("Awards **1 point** per completed Gameweek to the manager with the single highest match score across both C&D Premier & Championship.")
+
+df_moty = calculate_manager_of_the_year(prem_data, champ_data)
+
+if not df_moty.empty:
+    st.dataframe(df_moty, use_container_width=True, hide_index=True)
+else:
+    st.info("Manager of the Year awards will be calculated as Gameweeks finish.")
