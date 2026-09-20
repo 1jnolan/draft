@@ -4,10 +4,38 @@ import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
 # --- Page Setup ---
+# Use standard centered container for natural mobile scaling
 st.set_page_config(page_title="Craft & Draft Squad & Player Analytics", layout="wide")
 
 # Auto-refresh every 60 seconds
 st_autorefresh(interval=60000, key="cnd_player_analysis_refresh")
+
+# --- Mobile Responsive CSS Styling ---
+st.markdown("""
+<style>
+    /* Reduce global outer margins on mobile phones */
+    @media (max-width: 768px) {
+        .main .block-container {
+            padding-left: 0.5rem !important;
+            padding-right: 0.5rem !important;
+            padding-top: 1rem !important;
+            padding-bottom: 2rem !important;
+        }
+        /* Make dataframes occupy 100% viewport width without overflowing */
+        [data-testid="stDataFrame"] {
+            width: 100% !important;
+        }
+        /* Adjust font size inside dataframe tables */
+        div[data-testid="stDataFrame"] div {
+            font-size: 0.82rem !important;
+        }
+        /* Make radio buttons wrap cleanly on small screens */
+        div[role="radiogroup"] {
+            gap: 0.3rem !important;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 CHAMPIONSHIP_LEAGUE_ID = 4159
 PREMIER_LEAGUE_ID = 858
@@ -166,13 +194,13 @@ def fetch_league_element_ownership(entries, current_gw):
 
 
 def parse_standings(league_data):
-    """Processes standings dataframe from league details."""
+    """Processes standings dataframe optimized for mobile screen width."""
     if not league_data or not isinstance(league_data, dict):
         return pd.DataFrame()
 
     entries = league_data.get("league_entries", [])
     entry_map = {
-        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+        e.get("id"): e.get("entry_name", "Team")
         for e in entries
         if isinstance(e, dict)
     }
@@ -206,26 +234,24 @@ def parse_standings(league_data):
         if actual_played == 0 and e_id in entry_played_count:
             actual_played = entry_played_count[e_id]
 
+        # Compact columns so table fits within 360-400px mobile widths
         standings_rows.append({
-            "Rank": s.get("rank", "-"),
-            "Team & Manager": team_display,
-            "Played": actual_played,
-            "Won": won,
-            "Drawn": drawn,
-            "Lost": lost,
-            "Points For": s.get("points_for", 0),
-            "Points Against": s.get("points_against", 0),
-            "Total Pts": s.get("total", 0),
+            "R": s.get("rank", "-"),
+            "Team": team_display,
+            "P": actual_played,
+            "W-D-L": f"{won}-{drawn}-{lost}",
+            "+/-": f"{s.get('points_for', 0)}/{s.get('points_against', 0)}",
+            "Pts": s.get("total", 0),
         })
 
     df_standings = pd.DataFrame(standings_rows)
     if not df_standings.empty:
-        df_standings.sort_values(by=["Rank"], inplace=True)
+        df_standings.sort_values(by=["R"], inplace=True)
     return df_standings
 
 
 def get_blooper_standings(prem_data, champ_data):
-    """Calculates live total points across both leagues, ranking lowest to highest."""
+    """Calculates live total points across both leagues, ranking lowest to highest in mobile width."""
     player_stats = []
     datasets = [prem_data, champ_data]
 
@@ -243,8 +269,8 @@ def get_blooper_standings(prem_data, champ_data):
             if isinstance(e, dict):
                 e_id = e.get("id")
                 entry_map[e_id] = {
-                    "player_name": f"{e.get('player_first_name', '')} {e.get('player_last_name', '')}".strip(),
-                    "team_name": e.get("entry_name", "Team"),
+                    "name": f"{e.get('player_first_name', '')} {e.get('player_last_name', '')[:1]}.".strip(),
+                    "team": e.get("entry_name", "Team"),
                 }
                 live_points[e_id] = 0
 
@@ -262,24 +288,24 @@ def get_blooper_standings(prem_data, champ_data):
 
         for e_id, info in entry_map.items():
             player_stats.append({
-                "Player Name": info["player_name"],
-                "Team Name": info["team_name"],
-                "Total Points": live_points.get(e_id, 0),
+                "Player": info["name"],
+                "Team": info["team"],
+                "Pts": live_points.get(e_id, 0),
             })
 
     if len(player_stats) < 16:
         for p in range(len(player_stats) + 1, 17):
             player_stats.append({
-                "Player Name": f"Placeholder Player {p}",
-                "Team Name": f"Placeholder Team {p}",
-                "Total Points": 0,
+                "Player": f"Player {p}",
+                "Team": f"Team {p}",
+                "Pts": 0,
             })
 
     df = pd.DataFrame(player_stats)
     if df.empty:
         return df
 
-    df.sort_values(by=["Total Points", "Player Name"], ascending=[True, True], inplace=True)
+    df.sort_values(by=["Pts", "Player"], ascending=[True, True], inplace=True)
     df.reset_index(drop=True, inplace=True)
 
     ranked_rows = []
@@ -287,31 +313,22 @@ def get_blooper_standings(prem_data, champ_data):
 
     for idx, row in df.iterrows():
         rank_num = idx + 1
-        if rank_num == 1:
-            rank_str = "💩 1"
-        elif rank_num == total_players:
-            rank_str = f"⭐ {rank_num}"
-        else:
-            rank_str = str(rank_num)
-
+        rank_str = "💩 1" if rank_num == 1 else (f"⭐ {rank_num}" if rank_num == total_players else str(rank_num))
         ranked_rows.append({
-            "Rank": rank_str,
-            "Player Name": row["Player Name"],
-            "Team Name": row["Team Name"],
-            "Total Points Scored": row["Total Points"],
+            "R": rank_str,
+            "Player": row["Player"],
+            "Team": row["Team"],
+            "Total Pts": row["Pts"],
         })
 
     return pd.DataFrame(ranked_rows)
 
 
 def calculate_manager_of_the_year(prem_data, champ_data):
-    """
-    Evaluates completed gameweeks across both leagues, finds the manager with
-    the highest gameweek score on each week, and awards 1 point per award.
-    """
+    """Calculates MOTY award winners in a mobile-optimized compact view."""
     leagues_payload = [
-        ("C&D Premier", prem_data),
-        ("C&D Championship", champ_data),
+        ("Prem", prem_data),
+        ("Champ", champ_data),
     ]
 
     manager_records = {}
@@ -326,7 +343,7 @@ def calculate_manager_of_the_year(prem_data, champ_data):
         for e in entries:
             if isinstance(e, dict):
                 e_id = e.get("id")
-                disp = f"{e.get('player_first_name', '')} {e.get('player_last_name', '')}".strip()
+                disp = f"{e.get('player_first_name', '')} {e.get('player_last_name', '')[:1]}.".strip()
                 t_name = e.get("entry_name", "Team")
                 entry_meta[e_id] = {
                     "manager": disp or t_name,
@@ -344,10 +361,7 @@ def calculate_manager_of_the_year(prem_data, champ_data):
                 }
 
         for m in l_data.get("matches", []):
-            if not isinstance(m, dict):
-                continue
-            is_finished = m.get("finished", False)
-            if not is_finished:
+            if not isinstance(m, dict) or not m.get("finished"):
                 continue
 
             gw = m.get("event")
@@ -379,40 +393,35 @@ def calculate_manager_of_the_year(prem_data, champ_data):
             for w_key in winners:
                 if w_key in manager_records:
                     manager_records[w_key]["motw_awards"] += 1
-                    manager_records[w_key]["gws_won"].append(f"GW {gw} ({max_score} pts)")
+                    manager_records[w_key]["gws_won"].append(str(gw))
 
     rows = []
     for info in manager_records.values():
-        gws_won_str = ", ".join(info["gws_won"]) if info["gws_won"] else "-"
+        gws_won_str = ",".join(info["gws_won"]) if info["gws_won"] else "-"
         rows.append({
-            "League": info["League"],
+            "Lge": info["League"],
             "Manager": info["Manager"],
-            "Team": info["Team"],
-            "Manager of the Week Awards": info["motw_awards"],
-            "Overall Points Scored": info["total_points_scored"],
-            "Gameweeks Won": gws_won_str,
+            "Awards": info["motw_awards"],
+            "Total Pts": info["total_points_scored"],
+            "GWs Won": gws_won_str,
         })
 
     df = pd.DataFrame(rows)
     if not df.empty:
-        df.sort_values(
-            by=["Manager of the Week Awards", "Overall Points Scored"],
-            ascending=[False, False],
-            inplace=True,
-        )
+        df.sort_values(by=["Awards", "Total Pts"], ascending=[False, False], inplace=True)
         df.reset_index(drop=True, inplace=True)
-        df.insert(0, "Rank", range(1, len(df) + 1))
+        df.insert(0, "R", range(1, len(df) + 1))
     return df
 
 
 def parse_fixtures(league_data):
-    """Processes fixtures and scores list from league details."""
+    """Processes compact fixtures dataframe for mobile widths."""
     if not league_data or not isinstance(league_data, dict):
         return pd.DataFrame(), None
 
     entries = league_data.get("league_entries", [])
     entry_map = {
-        e.get("id"): f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+        e.get("id"): e.get("entry_name", "Team")
         for e in entries
         if isinstance(e, dict)
     }
@@ -429,16 +438,15 @@ def parse_fixtures(league_data):
         is_started = m.get("started", False)
         is_finished = m.get("finished", False)
 
-        status = "Finished" if is_finished else ("Live" if is_started else "Scheduled")
+        status = "FT" if is_finished else ("LIVE" if is_started else "SCHED")
         h_score = m.get("league_entry_1_points", 0) if (is_started or is_finished) else "-"
         a_score = m.get("league_entry_2_points", 0) if (is_started or is_finished) else "-"
 
         fixtures_list.append({
             "GW": gw,
-            "Home Team": entry_map.get(m.get("league_entry_1"), f"Entry {m.get('league_entry_1')}"),
-            "Home Score": h_score,
-            "Away Score": a_score,
-            "Away Team": entry_map.get(m.get("league_entry_2"), f"Entry {m.get('league_entry_2')}"),
+            "Home Team": entry_map.get(m.get("league_entry_1"), f"E{m.get('league_entry_1')}"),
+            "Score": f"{h_score} - {a_score}",
+            "Away Team": entry_map.get(m.get("league_entry_2"), f"E{m.get('league_entry_2')}"),
             "Status": status,
         })
 
@@ -449,8 +457,47 @@ def parse_fixtures(league_data):
     return df_fixtures, current_gw
 
 
+def get_manager_lineup_df(entry_id, gw, player_map, live_scores):
+    """Fetches manager lineup and formats into Starters and Bench DataFrames."""
+    if not entry_id:
+        return pd.DataFrame(), pd.DataFrame(), 0
+
+    gw_data = fetch_json(ENTRY_BASE_URL.format(entry_id, gw))
+    if not gw_data or not isinstance(gw_data, dict):
+        return pd.DataFrame(), pd.DataFrame(), 0
+
+    picks = gw_data.get("picks", [])
+    starters = []
+    bench = []
+    total_starters_pts = 0
+
+    for p in picks:
+        if not isinstance(p, dict):
+            continue
+        p_id = p.get("element")
+        order = p.get("position", 1)
+        info = player_map.get(p_id, {"web_name": f"P{p_id}", "position": "-", "team": "-"})
+        gw_pts = live_scores.get(p_id, 0)
+
+        record = {
+            "Pos": info.get("position", "-"),
+            "Player": f"{info.get('web_name')} ({info.get('team')})",
+            "Pts": gw_pts,
+        }
+
+        if order <= 11:
+            starters.append(record)
+            total_starters_pts += gw_pts
+        else:
+            bench.append(record)
+
+    df_starters = pd.DataFrame(starters)
+    df_bench = pd.DataFrame(bench)
+    return df_starters, df_bench, total_starters_pts
+
+
 def analyze_squad_usage(entries, player_map, finished_gws):
-    """Parses each manager's lineup across gameweeks to assess starter vs bench usage."""
+    """Parses each manager's lineup usage in a compact format."""
     squad_stats = []
 
     for entry in entries:
@@ -460,8 +507,6 @@ def analyze_squad_usage(entries, player_map, finished_gws):
 
         started_points = 0
         benched_points = 0
-        active_lineup_count = 0
-
         recent_gws = finished_gws[-5:] if len(finished_gws) > 5 else finished_gws
 
         for gw in recent_gws:
@@ -469,36 +514,27 @@ def analyze_squad_usage(entries, player_map, finished_gws):
             if not gw_data or not isinstance(gw_data, dict):
                 continue
 
-            picks = gw_data.get("picks", [])
-            for p in picks:
+            for p in gw_data.get("picks", []):
                 if not isinstance(p, dict):
                     continue
                 p_id = p.get("element")
                 pos_order = p.get("position", 1)
                 p_info = player_map.get(p_id, {})
-
                 approx_pts = p_info.get("total_points", 0) / max(len(finished_gws), 1)
 
                 if pos_order <= 11:
                     started_points += approx_pts
-                    active_lineup_count += 1
                 else:
                     benched_points += approx_pts
 
         total_pts = started_points + benched_points
-        bench_efficiency = (
-            round((started_points / total_pts) * 100, 1) if total_pts > 0 else 100.0
-        )
-
-        league_label = "C&D Championship" if entry["league_id"] == 4159 else "C&D Premier"
+        bench_efficiency = round((started_points / total_pts) * 100, 1) if total_pts > 0 else 100.0
 
         squad_stats.append({
-            "League": league_label,
-            "Manager": entry["display_name"],
             "Team": entry["team_name"],
-            "Starting Squad Contribution (Est Pts)": round(started_points, 1),
-            "Benched Points (Est Pts)": round(benched_points, 1),
-            "Lineup Efficiency (%)": f"{bench_efficiency}%",
+            "Start Pts": round(started_points, 1),
+            "Bench Pts": round(benched_points, 1),
+            "Eff (%)": f"{bench_efficiency}%",
         })
 
     return pd.DataFrame(squad_stats)
@@ -510,7 +546,6 @@ champ_data = fetch_json(LEAGUE_URL_FMT.format(CHAMPIONSHIP_LEAGUE_ID))
 prem_data = fetch_json(LEAGUE_URL_FMT.format(PREMIER_LEAGUE_ID))
 all_entries = get_all_league_entries()
 
-# Determine active gameweek
 detected_active_gw = (
     (prem_data and prem_data.get("league", {}).get("current_event"))
     or (champ_data and champ_data.get("league", {}).get("current_event"))
@@ -552,7 +587,7 @@ elif standings_league_choice == "Championship Standings":
         st.info("Standings will appear once matches have commenced.")
 
 elif standings_league_choice == "Blooper League Standings":
-    st.caption("Live combined standings across both leagues — lowest point scorers rank highest!")
+    st.caption("Lowest point scorers rank highest.")
     df_blooper = get_blooper_standings(prem_data, champ_data)
     if not df_blooper.empty:
         st.dataframe(df_blooper, use_container_width=True, hide_index=True)
@@ -560,7 +595,7 @@ elif standings_league_choice == "Blooper League Standings":
         st.info("Blooper standings will appear once matches have commenced.")
 
 elif standings_league_choice == "Manager of the Year":
-    st.caption("Awards **1 point** per completed Gameweek to the manager with the single highest match score across both C&D Premier & Championship.")
+    st.caption("1 point awarded per completed GW to highest match score across both leagues.")
     df_moty = calculate_manager_of_the_year(prem_data, champ_data)
     if not df_moty.empty:
         st.dataframe(df_moty, use_container_width=True, hide_index=True)
@@ -605,63 +640,144 @@ if not df_fixtures.empty:
         selected_gw_num = int(selected_option.replace("Gameweek ", ""))
         df_display = df_fixtures[df_fixtures["GW"] == selected_gw_num]
 
-    st.caption(f"Showing live fixtures for **{selected_option}**")
-    st.dataframe(df_display, use_container_width=True, hide_index=True, height=350)
+    st.dataframe(df_display, use_container_width=True, hide_index=True, height=260)
 else:
     st.info("No fixtures found.")
+
+# ==========================================================
+# 2B. ⚔️ HEAD-TO-HEAD FIXTURE LINEUPS (SIDE-BY-SIDE)
+# ==========================================================
+st.markdown("#### ⚔️ Fixture Lineup Breakdown")
+
+if selected_fixtures_data and isinstance(selected_fixtures_data, dict):
+    h2h_entries = selected_fixtures_data.get("league_entries", [])
+    entry_lookup = {}
+    for e in h2h_entries:
+        if isinstance(e, dict):
+            e_id = e.get("id")
+            team_name = e.get("entry_name", "Team")
+            mgr = f"{e.get('player_first_name', '')} {e.get('player_last_name', '')[:1]}.".strip()
+            entry_lookup[e_id] = {
+                "display": f"{team_name} ({mgr})",
+                "entry_id": e.get("entry_id"),
+            }
+
+    h2h_matches = selected_fixtures_data.get("matches", [])
+    all_gw_nums = sorted(list({m.get("event") for m in h2h_matches if isinstance(m, dict) and m.get("event")}))
+
+    if all_gw_nums:
+        col_gw_drop, col_fix_drop = st.columns(2)
+
+        default_gw_idx = all_gw_nums.index(active_gw) if active_gw in all_gw_nums else len(all_gw_nums) - 1
+        with col_gw_drop:
+            chosen_h2h_gw = st.selectbox(
+                "1. Select GW:",
+                all_gw_nums,
+                index=default_gw_idx,
+                format_func=lambda g: f"GW {g}",
+                key=f"h2h_gw_drop_{fixtures_league_choice}",
+            )
+
+        gw_matches = [m for m in h2h_matches if isinstance(m, dict) and m.get("event") == chosen_h2h_gw]
+
+        fixture_options = {}
+        for idx, m in enumerate(gw_matches):
+            e1 = m.get("league_entry_1")
+            e2 = m.get("league_entry_2")
+            t1_name = entry_lookup.get(e1, {}).get("display", f"Entry {e1}")
+            t2_name = entry_lookup.get(e2, {}).get("display", f"Entry {e2}")
+            label = f"F{idx + 1}: {t1_name} vs {t2_name}"
+            fixture_options[label] = m
+
+        with col_fix_drop:
+            chosen_fixture_label = st.selectbox(
+                "2. Select Match:",
+                list(fixture_options.keys()),
+                key=f"h2h_fix_drop_{fixtures_league_choice}",
+            )
+
+        chosen_match = fixture_options.get(chosen_fixture_label)
+
+        if chosen_match:
+            e1_id = chosen_match.get("league_entry_1")
+            e2_id = chosen_match.get("league_entry_2")
+
+            real_entry1 = entry_lookup.get(e1_id, {}).get("entry_id")
+            real_entry2 = entry_lookup.get(e2_id, {}).get("entry_id")
+
+            team1_label = entry_lookup.get(e1_id, {}).get("display", "Team 1")
+            team2_label = entry_lookup.get(e2_id, {}).get("display", "Team 2")
+
+            gw_scores = fetch_gw_live_scores(chosen_h2h_gw)
+
+            with st.spinner("Loading rosters..."):
+                t1_starters, t1_bench, t1_pts = get_manager_lineup_df(real_entry1, chosen_h2h_gw, player_map, gw_scores)
+                t2_starters, t2_bench, t2_pts = get_manager_lineup_df(real_entry2, chosen_h2h_gw, player_map, gw_scores)
+
+            score_diff = t1_pts - t2_pts
+            diff_text = f"+{score_diff}" if score_diff > 0 else f"{score_diff}"
+            st.info(f"**{team1_label}** ({t1_pts}) vs **{team2_label}** ({t2_pts}) | Margin: **{diff_text}**")
+
+            # Stack sequentially on mobile or use tight columns
+            col_t1, col_t2 = st.columns(2)
+
+            with col_t1:
+                st.markdown(f"**🏠 {team1_label}**")
+                st.caption(f"Starters ({t1_pts} pts)")
+                if not t1_starters.empty:
+                    st.dataframe(t1_starters, use_container_width=True, hide_index=True)
+                st.caption("Bench")
+                if not t1_bench.empty:
+                    st.dataframe(t1_bench, use_container_width=True, hide_index=True)
+
+            with col_t2:
+                st.markdown(f"**🚗 {team2_label}**")
+                st.caption(f"Starters ({t2_pts} pts)")
+                if not t2_starters.empty:
+                    st.dataframe(t2_starters, use_container_width=True, hide_index=True)
+                st.caption("Bench")
+                if not t2_bench.empty:
+                    st.dataframe(t2_bench, use_container_width=True, hide_index=True)
+    else:
+        st.info("No fixtures scheduled yet.")
 
 st.divider()
 
 # ==========================================================
 # 3. ⚽ PREMIER LEAGUE PLAYER POOL PERFORMANCE
 # ==========================================================
-st.subheader("⚽ Premier League Player Pool Performance")
+st.subheader("⚽ Player Pool Performance")
 
 if player_map:
     player_records = []
     for p_id, p_info in player_map.items():
+        # Compact strings for mobile view
         player_records.append({
-            "Player": p_info["web_name"],
-            "Full Name": p_info["full_name"],
-            "Club": p_info["team"],
-            "Position": p_info["position"],
-            "Total Points": p_info["total_points"],
-            "C&D Premier Owner": prem_owners.get(p_id, "Free Agent"),
-            "C&D Championship Owner": champ_owners.get(p_id, "Free Agent"),
-            "Goals": p_info["goals"],
-            "Assists": p_info["assists"],
-            "Clean Sheets": p_info["clean_sheets"],
-            "Minutes": p_info["minutes"],
+            "Player": f"{p_info['web_name']} ({p_info['team']})",
+            "Pos": p_info["position"],
+            "Pts": p_info["total_points"],
+            "Prem": prem_owners.get(p_id, "-")[:12],
+            "Champ": champ_owners.get(p_id, "-")[:12],
+            "G": p_info["goals"],
+            "A": p_info["assists"],
         })
 
     df_players = pd.DataFrame(player_records)
 
     c1, c2, c3 = st.columns(3)
-    pos_filter = c1.selectbox(
-        "Position Filter:", ["All Positions"] + sorted(list(pos_map.values()))
-    )
-    club_filter = c2.selectbox(
-        "Club Filter:", ["All Clubs"] + sorted(list(team_map.values()))
-    )
-    min_points = c3.slider("Minimum Total Points:", 0, 250, 0)
+    pos_filter = c1.selectbox("Position:", ["All"] + sorted(list(pos_map.values())))
+    club_filter = c2.selectbox("Club:", ["All"] + sorted(list(team_map.values())))
+    min_points = c3.slider("Min Pts:", 0, 250, 0)
 
     df_filtered_players = df_players.copy()
-    if pos_filter != "All Positions":
-        df_filtered_players = df_filtered_players[
-            df_filtered_players["Position"] == pos_filter
-        ]
-    if club_filter != "All Clubs":
-        df_filtered_players = df_filtered_players[
-            df_filtered_players["Club"] == club_filter
-        ]
-    df_filtered_players = df_filtered_players[
-        df_filtered_players["Total Points"] >= min_points
-    ]
+    if pos_filter != "All":
+        df_filtered_players = df_filtered_players[df_filtered_players["Pos"] == pos_filter]
+    if club_filter != "All":
+        df_filtered_players = df_filtered_players[df_filtered_players["Player"].str.contains(f"({club_filter})", regex=False)]
+    df_filtered_players = df_filtered_players[df_filtered_players["Pts"] >= min_points]
 
-    df_filtered_players.sort_values(by="Total Points", ascending=False, inplace=True)
-    st.dataframe(
-        df_filtered_players, use_container_width=True, hide_index=True, height=400
-    )
+    df_filtered_players.sort_values(by="Pts", ascending=False, inplace=True)
+    st.dataframe(df_filtered_players, use_container_width=True, hide_index=True, height=350)
 else:
     st.info("Player data could not be loaded.")
 
@@ -670,12 +786,11 @@ st.divider()
 # ==========================================================
 # 4. 🧠 MANAGER LINEUP SELECTION & SQUAD USAGE
 # ==========================================================
-st.subheader("🧠 Manager Lineup Selection & Squad Usage")
-st.caption("Analyzes starting lineup optimization vs points left on the bench.")
+st.subheader("🧠 Squad & Bench Usage")
 
 league_filter = st.radio(
-    "Filter Squad Analysis by League:",
-    ["All Leagues Combined", "C&D Premier", "C&D Championship"],
+    "Filter League:",
+    ["All Combined", "C&D Premier", "C&D Championship"],
     horizontal=True,
 )
 
@@ -685,13 +800,11 @@ if league_filter == "C&D Premier":
 elif league_filter == "C&D Championship":
     selected_entries = [e for e in all_entries if e["league_id"] == CHAMPIONSHIP_LEAGUE_ID]
 
-with st.spinner("Analyzing manager squad selections across leagues..."):
+with st.spinner("Analyzing squad usage..."):
     df_squad_usage = analyze_squad_usage(selected_entries, player_map, finished_gws)
 
 if not df_squad_usage.empty:
-    df_squad_usage.sort_values(
-        by="Starting Squad Contribution (Est Pts)", ascending=False, inplace=True
-    )
+    df_squad_usage.sort_values(by="Start Pts", ascending=False, inplace=True)
     st.dataframe(df_squad_usage, use_container_width=True, hide_index=True)
 else:
     st.info("Squad analysis will populate as fixtures progress.")
@@ -723,7 +836,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
 
     for e in m_entries:
         if isinstance(e, dict):
-            name = f"{e.get('entry_name', 'Team')} ({e.get('player_first_name', '')} {e.get('player_last_name', '')})"
+            name = e.get("entry_name", "Team")
             m_manager_names.append(name)
             if "id" in e:
                 m_id_to_name[e["id"]] = name
@@ -778,7 +891,7 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
                 m_all_active_gws.add(gw)
                 el_in = tx.get("element_in")
                 el_out = tx.get("element_out")
-                move_type = "Waiver" if kind == "w" else "Free Agency"
+                move_type = "Waiver" if kind == "w" else "FA"
 
                 if gw not in m_gw_scores_cache:
                     m_gw_scores_cache[gw] = fetch_gw_live_scores(gw)
@@ -803,78 +916,50 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
                         m_player_counts[el_out] = {"in": 0, "out": 0}
                     m_player_counts[el_out]["out"] += 1
 
-                if out_pts > 0:
-                    tx_pct = round(((in_pts - out_pts) / out_pts) * 100, 1)
-                    tx_pct_str = f"+{tx_pct}%" if tx_pct > 0 else f"{tx_pct}%"
-                elif in_pts > 0:
-                    tx_pct_str = "+100% (Pure Gain)"
-                else:
-                    tx_pct_str = "0.0%"
-
-                p_in_info = (player_map or {}).get(el_in, {"web_name": f"Player {el_in}", "team": "-", "position": "-"})
-                p_out_info = (player_map or {}).get(el_out, {"web_name": f"Player {el_out}", "team": "-", "position": "-"})
+                p_in_info = (player_map or {}).get(el_in, {"web_name": f"P{el_in}", "team": "-", "position": "-"})
+                p_out_info = (player_map or {}).get(el_out, {"web_name": f"P{el_out}", "team": "-", "position": "-"})
 
                 m_transfer_log.append({
-                    "Gameweek": f"GW {gw}",
-                    "Manager": m_name or f"Manager ({raw_id})",
-                    "Type": move_type,
-                    "Player In": f"{p_in_info['web_name']} ({p_in_info['team']})",
-                    "Pts In": in_pts,
-                    "Player Out": f"{p_out_info['web_name']} ({p_out_info['team']})",
-                    "Pts Out": out_pts,
-                    "Net Pts": f"+{net_pts}" if net_pts > 0 else str(net_pts),
-                    "Transfer ROI": tx_pct_str,
+                    "GW": f"GW{gw}",
+                    "Team": m_name or f"E{raw_id}",
+                    "In": f"{p_in_info['web_name']} ({in_pts}p)",
+                    "Out": f"{p_out_info['web_name']} ({out_pts}p)",
+                    "+/-": f"+{net_pts}" if net_pts > 0 else str(net_pts),
                 })
 
-    # Sub-section 5.1: Manager Waiver Activity & ROI Table
-    st.markdown("#### 📈 Manager Waiver Activity & Net Points Impact")
+    # Sub-section 5.1: Manager Waiver Activity
+    st.markdown("#### 📈 Waiver Activity & Net Impact")
     tx_list = []
     for m_name, stats in m_manager_stats.items():
-        att = stats["waiver_att"]
         succ = stats["waiver_succ"]
         fa = stats["fa_succ"]
-        total_changes = succ + fa
-        rate = round((succ / att) * 100, 1) if att > 0 else 0.0
         p_in = stats["pts_in"]
         p_out = stats["pts_out"]
         net_diff = p_in - p_out
 
-        if p_out > 0:
-            imp_pct = round(((p_in - p_out) / p_out) * 100, 1)
-            imp_pct_str = f"+{imp_pct}%" if imp_pct > 0 else f"{imp_pct}%"
-        elif p_in > 0:
-            imp_pct_str = "+100.0%"
-        else:
-            imp_pct_str = "0.0%"
-
         tx_list.append({
-            "Manager": m_name,
-            "Total Successful Changes": total_changes,
-            "Pts from Players IN": p_in,
-            "Pts from Players OUT": p_out,
-            "Net Points Diff": f"+{net_diff}" if net_diff > 0 else str(net_diff),
-            "Overall ROI (%)": imp_pct_str,
-            "Waivers Won": succ,
-            "Free Agent Pickups": fa,
-            "Waiver Success Rate": f"{rate}%",
-            "Active GWs": len(stats["gws"]),
+            "Team": m_name,
+            "Moves": succ + fa,
+            "In Pts": p_in,
+            "Out Pts": p_out,
+            "Net": f"+{net_diff}" if net_diff > 0 else str(net_diff),
+            "W/FA": f"{succ}/{fa}",
         })
 
     df_tx = pd.DataFrame(tx_list)
     if not df_tx.empty:
-        df_tx["sort_net"] = df_tx["Net Points Diff"].astype(int)
-        df_tx.sort_values(by=["sort_net", "Total Successful Changes"], ascending=[False, False], inplace=True)
+        df_tx["sort_net"] = df_tx["Net"].astype(int)
+        df_tx.sort_values(by=["sort_net", "Moves"], ascending=[False, False], inplace=True)
         df_tx.drop(columns=["sort_net"], inplace=True)
         st.dataframe(df_tx, use_container_width=True, hide_index=True)
     else:
         st.info("No transaction stats recorded.")
 
     # Sub-section 5.2: Manager-to-Manager Trades Tracker
-    st.markdown("#### 🤝 Manager-to-Manager Trades Tracker")
+    st.markdown("#### 🤝 Manager Trades")
     trade_counts = {m_name: 0 for m_name in m_manager_names}
     if trades_data and isinstance(trades_data, dict):
-        trades = trades_data.get("trades", [])
-        for t in trades:
+        for t in trades_data.get("trades", []):
             if isinstance(t, dict) and t.get("state") == "p":
                 e1 = t.get("offered_entry")
                 e2 = t.get("received_entry")
@@ -885,66 +970,56 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
                 if name2 in trade_counts:
                     trade_counts[name2] += 1
 
-    trades_list = [{"Manager": m_name, "Completed Trades Involved": count} for m_name, count in trade_counts.items()]
+    trades_list = [{"Team": m_name, "Completed Trades": count} for m_name, count in trade_counts.items()]
     df_trades = pd.DataFrame(trades_list)
     if not df_trades.empty:
-        df_trades.sort_values(by="Completed Trades Involved", ascending=False, inplace=True)
+        df_trades.sort_values(by="Completed Trades", ascending=False, inplace=True)
         st.dataframe(df_trades, use_container_width=True, hide_index=True)
     else:
         st.info("No completed trade data available.")
 
     # Sub-section 5.3: Most Transferred Players
-    st.markdown("#### 📊 Most Transferred Players (In & Out)")
+    st.markdown("#### 📊 Most Transferred Players")
     player_summary = []
     for p_id, counts in m_player_counts.items():
-        info = (player_map or {}).get(p_id, {"web_name": f"Player {p_id}", "team": "-", "position": "-"})
+        info = (player_map or {}).get(p_id, {"web_name": f"P{p_id}", "team": "-", "position": "-"})
         times_in = counts["in"]
         times_out = counts["out"]
-        total_activity = times_in + times_out
         net_movement = times_in - times_out
 
         player_summary.append({
-            "Player": info["web_name"],
-            "Club": info["team"],
-            "Pos": info["position"],
-            "Times Brought IN": times_in,
-            "Times Dropped OUT": times_out,
-            "Total Transactions": total_activity,
-            "Net Movement (+/-)": f"+{net_movement}" if net_movement > 0 else str(net_movement),
+            "Player": f"{info['web_name']} ({info['team']})",
+            "In": times_in,
+            "Out": times_out,
+            "Total": times_in + times_out,
+            "Net": f"+{net_movement}" if net_movement > 0 else str(net_movement),
         })
 
     df_transferred_players = pd.DataFrame(player_summary)
     if not df_transferred_players.empty:
-        df_transferred_players.sort_values(by=["Total Transactions", "Times Brought IN"], ascending=[False, False], inplace=True)
+        df_transferred_players.sort_values(by=["Total", "In"], ascending=[False, False], inplace=True)
         st.dataframe(df_transferred_players, use_container_width=True, hide_index=True)
     else:
         st.info("No player transfers recorded yet this season.")
 
     # Sub-section 5.4: Detailed Transaction Log
-    st.markdown("#### 📜 Detailed Roster Move & Gameweek Points Impact Log")
+    st.markdown("#### 📜 Detailed Transfer Log")
     df_log = pd.DataFrame(m_transfer_log)
     if not df_log.empty:
-        all_managers = ["All Managers"] + sorted(list(df_log["Manager"].unique()))
-        selected_mgr = st.selectbox("Filter moves by Manager:", all_managers, key="tx_log_mgr_filter")
-
-        if selected_mgr != "All Managers":
-            df_display_log = df_log[df_log["Manager"] == selected_mgr]
-        else:
-            df_display_log = df_log
-
-        st.dataframe(df_display_log, use_container_width=True, hide_index=True, height=350)
+        all_managers = ["All"] + sorted(list(df_log["Team"].unique()))
+        selected_mgr = st.selectbox("Filter Team:", all_managers, key="tx_log_mgr_filter")
+        df_display_log = df_log if selected_mgr == "All" else df_log[df_log["Team"] == selected_mgr]
+        st.dataframe(df_display_log, use_container_width=True, hide_index=True, height=280)
     else:
         st.info("No transaction history available yet.")
 
     # Sub-section 5.5: Manager Gameweek Transfer Points Leaderboard
-    st.markdown("#### 🏆 Manager Gameweek Transfer Points Leaderboard")
-    st.caption("Ranks managers by points scored by incoming transfer players for a selected Gameweek and across the entire season.")
-
+    st.markdown("#### 🏆 Transfer Points Leaderboard")
     sorted_gws = sorted(list(m_all_active_gws))
 
     if sorted_gws:
         selected_gw_choice = st.selectbox(
-            "Select Gameweek to Inspect:",
+            "Inspect GW:",
             [f"Gameweek {g}" for g in sorted_gws],
             index=len(sorted_gws) - 1,
             key=f"market_gw_selector_{market_league_choice}",
@@ -957,17 +1032,17 @@ if active_market_league_data and isinstance(active_market_league_data, dict):
             total_pts_all_gws = sum(m_manager_gw_pts_in.get(m_name, {}).values())
 
             gw_leaderboard_rows.append({
-                "Manager": m_name,
-                f"GW {selected_gw_num} Points In": gw_pts,
-                "Total Transfer Points": total_pts_all_gws,
+                "Team": m_name,
+                f"GW{selected_gw_num} Pts": gw_pts,
+                "Total Pts": total_pts_all_gws,
             })
 
         df_gw_leaderboard = pd.DataFrame(gw_leaderboard_rows)
 
         if not df_gw_leaderboard.empty:
-            df_gw_leaderboard.sort_values(by="Total Transfer Points", ascending=False, inplace=True)
+            df_gw_leaderboard.sort_values(by="Total Pts", ascending=False, inplace=True)
             df_gw_leaderboard.reset_index(drop=True, inplace=True)
-            df_gw_leaderboard.insert(0, "Rank", range(1, len(df_gw_leaderboard) + 1))
+            df_gw_leaderboard.insert(0, "R", range(1, len(df_gw_leaderboard) + 1))
             st.dataframe(df_gw_leaderboard, use_container_width=True, hide_index=True)
         else:
             st.info("No leaderboard data available.")
